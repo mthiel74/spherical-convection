@@ -1,7 +1,7 @@
 # Physical and numerical parameters for rotating spherical shell convection
 
 # Rotation
-OMEGA = 10.0          # rotation rate (non-dimensional); high = banana cells
+OMEGA = 15.0          # rotation rate (non-dimensional); high = banana cells
 
 # Spectral resolution
 LMAX = 42             # maximum spherical harmonic degree (T42)
@@ -10,8 +10,8 @@ LMAX = 42             # maximum spherical harmonic degree (T42)
 NU_HYPER = 1e-12      # hyperviscosity; damps small scales
 
 # Stochastic forcing
-FORCE_LMIN = 8        # inject energy at l >= FORCE_LMIN
-FORCE_LMAX = 20       # inject energy at l <= FORCE_LMAX
+FORCE_LMIN = 6        # inject energy at l >= FORCE_LMIN
+FORCE_LMAX = 15       # inject energy at l <= FORCE_LMAX
 FORCE_AMP  = 0.08     # forcing amplitude per timestep
 
 # Time stepping
