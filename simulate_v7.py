@@ -10,19 +10,19 @@ simulate_v7.py — forced–dissipative barotropic vorticity on a rotating spher
     μ              uniform linear (Rayleigh) drag  (arrests the inverse cascade)
     F              stochastic forcing in a narrow high-l band
 
-This is the SAME equation and the SAME (verified-correct) numerics as v6 — RK2
-(Heun) for advection + exact integrating factor for dissipation (Lie splitting,
-globally O(dt)), with the FIXED Coriolis coefficient 2Ω/√3 (see ._f_lm).  The
-ONLY difference from simulate_v6 is the import: this module reads config_v7,
-whose parameters implement scientific improvement #1 — a wide forcing–Rhines
+This is the SAME equation and the SAME (verified-correct) spatial discretisation
+as v6 — RK2 (Heun) for advection + an exact integrating factor for the linear
+dissipation — with the FIXED Coriolis coefficient 2Ω/√3 (see ._f_lm).  The
+parameters (config_v7) implement scientific improvement #1: a wide forcing–Rhines
 separation (l_f≈100–120, l_R≈10, ratio ≈11; weak drag μ=0.01; T170) aimed at the
 zonostrophic regime (target R_β ≳ 2) so that zonal jets can actually form.  See
 config_v7.py for the full parameter derivation and honesty caveats, and
 scientific_improvements.md §1.
 
-Later improvements (#2 measure to steady state, #3/#4 higher-order time stepping,
-#5 controlled forcing, #8 spectral flux) will modify this solver; for now it is a
-verbatim copy of the v6 solver so that #1 is isolated to the parameter change.
+Improvements implemented on top of the v6 solver:
+  • #2  auto-stationarity detection during spin-up  (spinup_to_stationary)
+  • #3  STRANG (2nd-order) operator splitting for the time step
+        S(dt) = L(dt/2)·N(dt)·L(dt/2)  — replaces the old Lie–Trotter O(dt) split
 
 It is NOT a convection model — there is no buoyancy, stratification, energy
 equation or vertical velocity.  See README_v6.md.
@@ -67,7 +67,12 @@ class SpectralVorticity:
     def __init__(self):
         self.lmax = LMAX
         self._ev = _laplacian_eigenvalues(self.lmax)          # (2,L+1,L+1)
+        # Full-step linear integrating factor exp(−(μ+νλ⁴)·dt) …
         self._visc = _dissipation_filter(self.lmax, NU_HYPER, LINEAR_DRAG, DT)
+        # … and the HALF-step factor exp(−(μ+νλ⁴)·dt/2) = √(visc) needed by the
+        # symmetric Strang split L(dt/2)·N(dt)·L(dt/2)  (improvement #3).
+        self._sqrt_visc = _dissipation_filter(self.lmax, NU_HYPER, LINEAR_DRAG,
+                                              DT / 2.0)
 
         # Inverse Laplacian eigenvalues (ψ = ∇⁻²ω); l=0 mode is 0.
         self._inv_ev = np.zeros_like(self._ev)
@@ -131,19 +136,54 @@ class SpectralVorticity:
                 f_lm[1, l, 1:l + 1] = rng.standard_normal(l) * amp
         return f_lm
 
-    # ── time step (Heun advection + exact linear factor, Lie split O(dt)) ─
+    # ── time step (Strang split: ½-diss · Heun advection · ½-diss + forcing) ─
 
     def _tendency(self, omega_lm):
+        """Nonlinear tendency N(ω) = −J(ψ, ω+f),  ψ = ∇⁻²ω."""
         psi_lm = self._inv_ev * omega_lm
         abs_vor_lm = omega_lm + self._f_lm
         return -self._jacobian_lm(psi_lm, abs_vor_lm)
 
     def step(self, rng):
-        k1 = self._tendency(self.omega_lm)
-        k2 = self._tendency(self.omega_lm + DT * k1)
-        rhs = self.omega_lm + 0.5 * DT * (k1 + k2)
-        rhs += self._stochastic_forcing(rng)
-        self.omega_lm = self._visc * rhs
+        """
+        Advance one step with STRANG (2nd-order) operator splitting
+        (improvement #3).
+
+        Write the vorticity equation as  ∂ω/∂t = L ω + N(ω), where
+            L ω  = −(μ + ν λ⁴) ω        (linear dissipation + drag; λ = l(l+1))
+            N(ω) = −J(ψ, ω+f)           (nonlinear advection of absolute vort.)
+        Let L(τ) = exp(Lτ) be the EXACT linear flow (diagonal in spectral space;
+        the half-step factor is self._sqrt_visc = exp(L·dt/2)) and N(dt) the
+        full-step Heun (RK2) advance of the nonlinear part.  The SYMMETRIC
+        composition (Strang 1968, SIAM J. Numer. Anal. 5, 506)
+
+            S(dt) = L(dt/2) · N(dt) · L(dt/2)
+
+        is 2nd-order accurate: local truncation error O(dt³), global error
+        O(dt²).  By the Baker–Campbell–Hausdorff expansion the leading splitting
+        error of the ASYMMETRIC Lie–Trotter product L(dt)·N(dt) is
+        ½dt²[L,N] + O(dt³) — first order globally; symmetrising cancels that
+        commutator term, leaving −(dt³/24)([L,[L,N]] + 2[N,[L,N]]) + …, i.e.
+        second order.  This restores the 2nd order that Heun and the integrating
+        factor already have individually but the previous Lie split destroyed
+        (observed step-halving error ratio ≈ 2.0 → target ≈ 4.0).
+
+        The stochastic forcing is white-in-time (a √dt Wiener increment, not a
+        smooth tendency), so it is added as a separate increment AFTER the
+        deterministic symmetric split — preserving the √dt scaling, exactly as
+        before.
+        """
+        # ½-step dissipation:  ω ← exp(L·dt/2) ω   [ = ω · √(visc_filter) ]
+        w = self._sqrt_visc * self.omega_lm
+        # full-step Heun (RK2) advection of the nonlinear Jacobian:  N(dt)
+        k1 = self._tendency(w)
+        k2 = self._tendency(w + DT * k1)
+        w = w + 0.5 * DT * (k1 + k2)
+        # ½-step dissipation:  ω ← exp(L·dt/2) ω
+        w = self._sqrt_visc * w
+        # add stochastic forcing after the split (white-in-time √dt increment)
+        w = w + self._stochastic_forcing(rng)
+        self.omega_lm = w
         self.omega_lm[:, 0, 0] = 0.0          # keep mean vorticity zero
 
     # ── output ──────────────────────────────────────────────────────────
