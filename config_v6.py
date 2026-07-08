@@ -102,20 +102,32 @@ SURFACE_DS = 1        # downsample stride for the coloured outer surface
 # the degree whose half-wavelength spans the shell, so shell-scale structures
 # reach the base while fine filaments remain surface-confined.  This is an
 # illustrative reconstruction (honestly labelled), NOT solved interior dynamics.
+#
+# HONESTY: L_REF=10 OVERSTATES the radial penetration of forcing-scale modes by
+# ~10× relative to the true (r/R)^l eigenfunction — the e-folding depth is L_REF×
+# larger.  A true (r/R)^l puts the forcing scale (l≈70) at ~4e-11 of surface
+# amplitude at the base (0.71^70); L_REF=10 paints it at ~9%.  This is an
+# illustrative choice to fill the cutaway, not physics; a 2-D barotropic model
+# carries no radial structure at all.  (v6_critical_audit.md §4.4.)
 L_REF      = 10       # mixing-length reference degree for radial penetration
 CORE_LMAX  = 12       # radiative interior painted from only the largest scales
 
-# Differential-rotation shear.  The Sun rotates faster at the equator/surface
-# than deeper down; a pattern continued inward is therefore twisted in longitude
-# with depth.  We rotate the reconstructed field by a longitude offset that grows
-# linearly from 0 at the surface (r=R_OUTER, so the cut faces still join the
-# coloured surface seamlessly) to SHEAR_DEG at the base (r=R_INNER).  This bends
-# the radial cross-section structures into concentric arcs along the shell.
-# v5 used an arbitrary 55°; we use a MODERATE, physically-motivated 25° — enough
-# to curve the structures, small enough not to over-wind them.  A longitude shift
-# is a pure rotation about the polar axis, applied in spectral space (each order-m
-# coefficient rotates by m·α), so it costs almost nothing.
-SHEAR_DEG  = 25.0     # peak longitude twist (deg) across the shell, base vs surface
+# Longitude twist for the cutaway faces.  We rotate the reconstructed field by a
+# longitude offset that grows linearly from 0 at the surface (r=R_OUTER, so the
+# cut faces join the coloured surface seamlessly) to SHEAR_DEG at the base
+# (r=R_INNER), bending the radial cross-section structures into concentric arcs.
+# A longitude shift is a pure rotation about the polar axis, applied in spectral
+# space (each order-m coefficient rotates by m·α), so it costs almost nothing.
+#
+# HONESTY: SHEAR_DEG=25° is a VISUALIZATION parameter that bends cross-section
+# structures into arcs; it is NOT derived from helioseismic differential rotation.
+# Solar differential rotation is a LATITUDINAL rate difference (ΔΩ/Ω ≈ 25–30%,
+# equator vs pole), NOT a radial longitude twist, and the strong radial shear is
+# confined to the tachocline (~0.7R) and near-surface layer, not a smooth 0→25°
+# ramp uniform in latitude.  The earlier "25% ≈ 25°" justification conflated a
+# fractional rate with a degree of arc; that reasoning was wrong.  25° is simply
+# a moderate, good-looking twist (v5 used an arbitrary 55°).
+SHEAR_DEG  = 25.0     # peak longitude twist (deg) across the shell — a viz choice
 
 # Camera
 VIEW_ELEV = 24.0

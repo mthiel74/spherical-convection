@@ -22,15 +22,24 @@ spans the shell; rescaling l→l/L_REF makes penetration depth ∝ horizontal
 wavelength (as convective cells stay coherent over ~a mixing length).  It is an
 illustrative reconstruction, honestly labelled — NOT solved interior dynamics.
 
+HONESTY: L_REF=10 OVERSTATES the radial penetration of the forcing-scale modes
+by ~10× relative to the true (r/R)^l eigenfunction (the e-folding depth is L_REF×
+larger).  A true (r/R)^l leaves the forcing scale (l≈70) at ~4e-11 of surface
+amplitude at the base; here it is painted at ~9%.  A 2-D barotropic field has NO
+radial content, so this whole interior is illustrative decoration, not physics
+(v6_critical_audit.md §4.4).
+
 Consequences, all physical in character rather than cosmetic:
 
   • large-scale (low-l) structures reach DEEP into the shell; fine filaments
     (high-l) stay surface-confined — the depth ordering follows from the
     eigenfunction, not from an ad-hoc decay law;
   • at r = R_outer the factor is 1, so the cut faces join the coloured surface
-    seamlessly; a MODERATE, physically-motivated differential-rotation shear then
-    twists the field in longitude with depth (0 at the surface → SHEAR_DEG at the
-    base), bending the radial cross-section structures into concentric arcs;
+    seamlessly; a longitude twist then bends the field with depth (0 at the
+    surface → SHEAR_DEG at the base), forming concentric arcs.  NOTE: this twist
+    is a VISUALIZATION choice, NOT solar differential rotation — the Sun's
+    differential rotation is a latitudinal RATE difference (ΔΩ/Ω), not a radial
+    longitude twist uniform in latitude (see SHEAR_DEG in config_v6);
   • the region below R_inner = 0.71 R_☉ is the STABLE radiative interior (no
     convection).  We paint the inner core with only the large-scale (l ≤ CORE_LMAX)
     part of the same field, continued to r = R_inner and coloured against its own
