@@ -292,6 +292,30 @@ TOPO_ENABLED = False
 # Default relief: an l=2,m=0 axisymmetric belt + an l=3,m=2 zonally-varying ridge.
 TOPO_MODES   = {(2, 0): 0.5, (3, 2): 0.3}
 
+# ── 11.  Equivalent-barotropic deformation radius L_d ────────────────────────
+# scientific_improvements.md §11.  Promote the PV inversion from q = ∇²ψ to the
+# equivalent-barotropic (free-surface / reduced-gravity) form
+#           q = ∇²ψ − ψ / L_d² (+ f),
+# introducing an intrinsic length scale L_d, the Rossby radius of deformation.
+# The prognostic field (still called `omega_lm` in the solver) is now this PV
+# anomaly q_rel = ∇²ψ − ψ/L_d²; only the INVERSION ψ = (∇² − L_d⁻²)⁻¹ q_rel
+# changes.  ∇² is diagonal with eigenvalue −l(l+1) in spectral space, so
+#           ψ_lm = −q_lm / [ l(l+1) + 1/L_d² ]      (was −q_lm / [l(l+1)]).
+# Advection J(ψ, q_rel+f), forcing and dissipation are structurally identical.
+# With finite L_d the inverse cascade halts at L_d as well as at the Rhines scale,
+# giving more realistic jet widths (Rhines 1975; Vallis 2017 §9).
+#
+#   LIMITS.  DEFORMATION_RADIUS = None ⇒ 1/L_d² = 0 ⇒ the rigid-lid barotropic
+#   model, byte-for-byte.  A finite L_d comparable to the domain (R=1) is the
+#   physically interesting regime; e.g. L_d = 0.2 gives 1/L_d² = 25, comparable
+#   to l(l+1) at l≈4–5, so it bites at planetary scales as intended.
+#
+#   HONESTY.  The energy diagnostic E_l = Z_l/[l(l+1)] in the solver assumes the
+#   rigid-lid relation E = ½∫|∇ψ|²; with finite L_d the true energy gains the
+#   ψ²/L_d² (available-potential) piece, so E_l under finite L_d is the KINETIC
+#   part only.  The default run (L_d=None) is unaffected.
+DEFORMATION_RADIUS = None   # None (rigid lid) or a float L_d (Rossby radius, R=1)
+
 # ── Time stepping ───────────────────────────────────────────────────────────
 # The linear (dissipation+drag) part is integrated EXACTLY by the integrating
 # factor, so dt is limited only by the advective CFL of the Heun (RK2) nonlinear

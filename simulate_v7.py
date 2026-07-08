@@ -43,7 +43,7 @@ from config_v7 import (OMEGA, LMAX, NU_HYPER, LINEAR_DRAG, FORCE_LMIN,
                        FORCE_TYPE, FORCE_CORR_TIME,
                        SVV_ENABLED, SVV_EPS0, SVV_LCUT,
                        DIFF_ROT_ENABLED, DIFF_ROT_DELTA_OMEGA, DIFF_ROT_TAU,
-                       TOPO_ENABLED, TOPO_MODES)
+                       TOPO_ENABLED, TOPO_MODES, DEFORMATION_RADIUS)
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -53,6 +53,26 @@ def _laplacian_eigenvalues(lmax):
     for l in range(lmax + 1):
         ev[:, l, :l + 1] = -l * (l + 1)
     return ev
+
+
+def _inverse_laplacian_ev(lmax, deformation_radius=None):
+    """
+    Diagonal multiplier for the PV inversion ψ = (∇² − L_d⁻²)⁻¹ q  (improvement
+    #11; scientific_improvements.md §11), in the (2,L+1,L+1) SHCoeffs layout.
+
+    Rigid-lid barotropic (deformation_radius=None):  ψ_lm = −q_lm/[l(l+1)].
+    Equivalent-barotropic (finite L_d):              ψ_lm = −q_lm/[l(l+1)+1/L_d²].
+
+    ∇² is diagonal with eigenvalue −l(l+1); adding the free-surface/reduced-gravity
+    term −ψ/L_d² shifts the eigenvalue to −(l(l+1)+1/L_d²), hence the inverse.
+    The l=0 slot is left at 0 (the solver holds the mean PV at zero, so ψ_00=0
+    either way; for the rigid lid l=0 is not invertible at all).
+    """
+    inv = np.zeros((2, lmax + 1, lmax + 1))
+    kd2 = 0.0 if deformation_radius is None else 1.0 / deformation_radius ** 2
+    for l in range(1, lmax + 1):
+        inv[:, l, :l + 1] = -1.0 / (l * (l + 1) + kd2)
+    return inv
 
 
 def _svv_rate(lmax, eps0, lcut):
@@ -329,10 +349,11 @@ class SpectralVorticity:
             (self._E, self._E2, self._Q,
              self._f1, self._f2, self._f3) = _etdrk4_coeffs(self._L, DT, ETDRK4_M)
 
-        # Inverse Laplacian eigenvalues (ψ = ∇⁻²ω); l=0 mode is 0.
-        self._inv_ev = np.zeros_like(self._ev)
-        for l in range(1, self.lmax + 1):
-            self._inv_ev[:, l, :l + 1] = -1.0 / (l * (l + 1))
+        # PV-inversion multiplier ψ = (∇² − L_d⁻²)⁻¹ q (improvement #11); with
+        # DEFORMATION_RADIUS=None this is the rigid-lid inverse Laplacian
+        # ψ = ∇⁻²ω = −ω/[l(l+1)] (l=0 mode 0), byte-for-byte unchanged.
+        self.deformation_radius = DEFORMATION_RADIUS
+        self._inv_ev = _inverse_laplacian_ev(self.lmax, DEFORMATION_RADIUS)
 
         # Planetary vorticity  f = 2Ω sinφ = 2Ω cosθ  →  only (l,m)=(1,0).
         # pyshtools 4π-normalised real harmonic:  Y₁⁰ = √3 cosθ.
