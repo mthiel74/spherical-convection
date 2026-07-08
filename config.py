@@ -67,7 +67,7 @@ SURFACE_DS = 1        # downsample stride for the coloured outer surface
 # run TANGENTIAL to the shell (concentric with the surface) instead of radial
 # spokes.  The shear vanishes at the outer rim so the faces still join the
 # surface colours seamlessly.
-SHEAR_DEG  = 55.0     # total longitude shear across the shell (deg)
+SHEAR_DEG  = -55.0    # total longitude shear across the shell (deg)
 
 # Camera
 VIEW_ELEV = 24.0
