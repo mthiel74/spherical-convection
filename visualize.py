@@ -11,14 +11,15 @@ outer sphere.  Removing that octant exposes three interior faces:
 and reveals the inner core (a smaller sphere of radius R_INNER).
 
 The interior vorticity on those faces is reconstructed from the surface field
-with a **spherical-shell mapping**: the field at an interior point (r, θ, φ) is
-taken from the surface value at the *same* colatitude/longitude (θ, φ) and
-modulated radially — a smooth inward decay plus a couple of radial modes that
-vanish at both the inner and outer boundaries.  So the structures curve with
-the spherical shell (concentric annuli on the equatorial cut, arcs on the
-meridional walls) instead of forming vertical columns, and the cross-sections
-still join the surface colours seamlessly at the outer rim (decay → 1, modes
-→ 0 there).
+with a **spherical-shell mapping** tuned for a thin (solar) convection zone:
+the field at an interior point (r, θ, φ) is taken from a longitude-sheared copy
+of the surface value and modulated by a *steep quartic* radial decay (ξ⁴).  The
+steep decay confines the vivid vorticity to the outer part of the shell and
+fades it to near-zero well before the inner core; the differential-rotation
+shear (deeper shells rotated in longitude) makes the structures curve into
+concentric, tangential arcs that follow the shell rather than radial spokes.
+The shear and radial-band modes both vanish at the outer rim, so the
+cross-sections still join the surface colours seamlessly there.
 
 Everything that must occlude everything else (outer surface, inner core, the
 three cut faces) is emitted into a *single* Poly3DCollection so matplotlib
@@ -37,7 +38,8 @@ from scipy.interpolate import RegularGridInterpolator
 
 from config import (IMG_SIZE, LMAX, R_INNER, R_OUTER, R_MID,
                     CUTAWAY_LON_START, CUTAWAY_LON_END,
-                    N_RADIAL, N_ANG, SURFACE_DS, VIEW_ELEV, VIEW_AZIM)
+                    N_RADIAL, N_ANG, SURFACE_DS, SHEAR_DEG,
+                    VIEW_ELEV, VIEW_AZIM)
 
 
 # ── colormap ────────────────────────────────────────────────────────────────
@@ -53,8 +55,8 @@ def _to_rgba(vals, vmax):
 
 
 # ── inner-core convection field (low degree, l = 2…6) ─────────────────────
-CORE_LMAX      = 6      # only large-scale, slow modes in the calmer inner region
-CORE_AMP       = 0.60   # colour amplitude relative to the surface (paler = calmer)
+CORE_LMAX      = 5      # only large-scale, slow modes in the calmer inner region
+CORE_AMP       = 0.50   # colour amplitude relative to the surface (paler = calmer)
 CORE_DRIFT_DEG = 0.35   # slow westward drift per frame → gentle inner motion
 _CORE_CACHE    = {}     # {'sample', 'vmax'} built lazily on first frame
 
@@ -127,34 +129,52 @@ def make_sampler(surface_field, lat, lon):
 
 def spherical_field(sample, X, Y, Z):
     """
-    Spherical-shell interior: sample the surface at the SAME colatitude and
-    longitude as the interior point (r, θ, φ), then modulate radially.
+    Spherical-shell interior reconstruction, built so the cross-sections show
+    convective structure **confined to the outer part of the thin shell** and
+    organised into **concentric, tangential arcs** — never radial spokes.
 
-    The radial modulation is  decay(r) · (1 + modes(r, θ))  where
+    Field  =  surf(θ, φ + shear(ξ)) · decay(ξ) · (1 + bands(ξ, θ))   with
+              ξ = (r − R_INNER)/(R_OUTER − R_INNER) ∈ [0, 1]  (0 = base, 1 = rim)
 
-        decay  = (r / R_OUTER)**2            — smooth inward fade
-        modes  = Σ aₖ sin(kπ ξ) · cos(nₖ θ)  — a few radial cells,
-                 ξ = (r − R_INNER)/(R_OUTER − R_INNER) ∈ [0, 1]
+      • decay = ξ⁴  — a *steep* quartic fade.  By mid-shell (ξ = 0.5) the
+        amplitude is only 0.5⁴ ≈ 0.06, so the vorticity is vivid near the outer
+        surface and has faded to near-zero (near-white) well before the inner
+        core boundary.  This is the base of the convection zone: no convection
+        below it.
 
-    Because sin(kπ ξ) vanishes at ξ = 0 and ξ = 1, the modes die at both the
-    inner core and the outer rim: at the rim decay → 1 and modes → 0, so the
-    face joins the coloured surface seamlessly, while the mid-shell carries
-    extra radial structure so the section is not a mere rescaled copy of the
-    surface.  Latitude-dependent mode amplitudes keep the cells from looking
-    like uniform rings; the pattern follows the spherical geometry.
+      • shear = SHEAR_DEG · (1 − ξ)  — deeper shells are sampled from a copy of
+        the surface field rotated in longitude (a differential-rotation shear).
+        Along a *radial* line ξ varies, so the sampled longitude sweeps → colours
+        change with depth and the structures curve into arcs that follow the
+        shell tangentially instead of radiating from the centre.  At the rim
+        (ξ = 1) the shear is 0, so the face joins the surface seamlessly.
+
+      • bands = a couple of radial half-waves sin(kπ ξ), modulated in latitude,
+        which vanish at ξ = 0 and ξ = 1.  These carve each concentric shell into
+        tangentially-elongated cells (arcs parallel to the surface) rather than
+        leaving smooth rings — again, no radial spokes.
     """
     r = np.sqrt(X * X + Y * Y + Z * Z)
     r = np.maximum(r, 1e-9)
     lat = np.degrees(np.arcsin(np.clip(Z / r, -1.0, 1.0)))
     lon_p = np.degrees(np.arctan2(Y, X))
-    surf = sample(lat, lon_p)
 
     xi = np.clip((r - R_INNER) / (R_OUTER - R_INNER), 0.0, 1.0)   # 0 … 1
-    decay = (r / R_OUTER) ** 2
+
+    # concentric arcs: sample a longitude-sheared copy of the surface field so
+    # each iso-radius shell is a rotated copy — structures run tangential.
+    shear = SHEAR_DEG * (1.0 - xi)
+    surf = sample(lat, lon_p + shear)
+
+    # steep quartic decay → structure hugs the outer surface, ~0 by mid-shell
+    decay = xi ** 4
+
+    # radial half-waves (vanish at both boundaries) break each shell into
+    # tangential cells; latitude modulation keeps them from being uniform rings
     rad = np.radians(lat)
-    modes = (0.32 * np.sin(2.0 * np.pi * xi) * np.cos(rad)
-             + 0.18 * np.sin(3.0 * np.pi * xi) * np.cos(2.0 * rad))
-    return surf * decay * (1.0 + modes)
+    bands = (0.45 * np.sin(2.0 * np.pi * xi) * np.cos(3.0 * rad)
+             + 0.28 * np.sin(3.0 * np.pi * xi) * np.cos(2.0 * rad))
+    return surf * decay * (1.0 + bands)
 
 
 # ── vectorised mesh → quads ────────────────────────────────────────────────
@@ -391,7 +411,7 @@ def render_frame(surface_field, frame_idx, total_frames, t_val,
     cbar.ax.tick_params(labelsize=8)
     fig.text(0.46, 0.94, "Rotating spherical-shell convection",
              ha='center', fontsize=13)
-    fig.text(0.46, 0.90, rf"$\omega'_z$      t = {t_val:6.1f}",
+    fig.text(0.46, 0.90, rf"$\omega'_z$      t = {t_val:6.1f} rotations",
              ha='center', fontsize=10, color='0.25')
     fig.subplots_adjust(left=-0.02, right=0.92, bottom=-0.02, top=0.92)
     return fig

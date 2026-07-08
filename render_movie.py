@@ -17,7 +17,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from config import (OUTPUT_GIF, OUTPUT_MP4, ICLOUD_MP4, FPS, FRAME_SKIP, DT,
-                    N_SPINUP)
+                    N_SPINUP, OMEGA)
 from simulate import run_simulation
 from visualize import render_frame, fig_to_rgb
 
@@ -61,8 +61,11 @@ def write_mp4(imgs, path, fps):
 def make_animation(frames, output_gif=OUTPUT_GIF, output_mp4=None,
                    icloud_mp4=None):
     imgs = []
-    t0 = N_SPINUP * DT
-    dt_f = FRAME_SKIP * DT
+    # Time is displayed in rotation periods:  t_rot = t_nondim · Ω / (2π).
+    # (One rotation period = 2π/Ω in these non-dimensional units.)
+    rot = OMEGA / (2.0 * np.pi)
+    t0 = N_SPINUP * DT * rot
+    dt_f = FRAME_SKIP * DT * rot
     total = len(frames)
     for i, field in enumerate(frames):
         t_val = t0 + i * dt_f
