@@ -55,7 +55,10 @@ FORCE_AMP  = 2.2      # forcing amplitude (tuned for effective Re ≈ 50–100)
 
 # ── Time stepping ───────────────────────────────────────────────────────────
 DT         = 1.5e-3   # timestep (smaller than v5 for stability at T127)
-N_SPINUP   = 22000    # steps before recording (≈ 33 time units ≈ 1 drag time)
+# ≥5 drag times ensures the energy-containing scales equilibrate; the v6 audit
+# showed 1 drag time was insufficient (energy still rising +3.7%, zonal fraction
+# still falling −26% across the recorded window — a transient, not steady state).
+N_SPINUP   = 110000   # steps before recording (= 165 time units ≈ 5 drag times)
 N_FRAMES   = 200      # frames to record
 FRAME_SKIP = 10       # simulation steps between frames
 

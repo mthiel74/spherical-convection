@@ -46,7 +46,7 @@ singularity of a naive ∂λ,∂φ Jacobian).
 | **Forcing band** | l = 24–52 (on the Rhines scale) | l = 60–80 (above the Rhines scale) | leaves room for *some* inverse transfer *below* and a forward enstrophy cascade *above* (→ filaments). Note the separation is only marginal (see below). |
 | **Linear drag μ** | 0.25 | 0.03 | v5's strong drag suppressed the inverse cascade entirely. Weak drag lets *some* upscale transfer run; it does not, at these parameters, produce jets (see below). |
 | **Resolution** | T85 | T127 | resolves the filament (forward enstrophy) range. |
-| **Spinup** | 8 000 steps | 22 000 steps | the cascade needs ~1 drag time to develop. |
+| **Spinup** | 8 000 steps | 110 000 steps (≈ 5 drag times) | the energy-containing scales relax on the drag time; the v6 audit showed 1 drag time left the run non-stationary (energy still +3.7%). ≥5/μ equilibrates them. |
 | **Interior** | ξ⁴-decayed, longitude-sheared copy of the surface + sinusoidal "bands" (cosmetic) | **radial eigenfunction** `(r/R)^l` (physics, see below) | v5's interior was painted on. |
 | **Inner core** | unrelated static random l=2–5 field | large-scale (l ≤ 6) part of the *actual* field, continued to r = R_inner | v5's core was noise dressed as calmness. |
 | **Time axis** | "rotations" (mis-scaled by 3.545) | non-dimensional time units | honest labelling. |
