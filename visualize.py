@@ -1,10 +1,29 @@
 """
-3-D sphere renderer with cutaway wedge.
+3-D spherical-shell renderer with an octant cutaway.
 
-Renders the z-component of vorticity on:
-  • the outer spherical surface (cutaway region hole-punched with NaN)
-  • the exposed equatorial cross-section  (Poly3DCollection)
-  • the two meridional cross-section faces (Poly3DCollection)
+The cutaway removes the wedge  { 0° ≤ lon < 90°  AND  lat > 0 }  from the
+outer sphere.  Removing that octant exposes three interior faces:
+
+    • an equatorial quarter-annulus      (z = 0 plane, r ∈ [R_INNER, R_OUTER])
+    • a meridional face at lon = 0°       (upper half, r ∈ [R_INNER, R_OUTER])
+    • a meridional face at lon = 90°      (upper half, r ∈ [R_INNER, R_OUTER])
+
+and reveals the inner core (a smaller sphere of radius R_INNER).
+
+The interior vorticity on those faces is reconstructed from the surface field
+with a **spherical-shell mapping**: the field at an interior point (r, θ, φ) is
+taken from the surface value at the *same* colatitude/longitude (θ, φ) and
+modulated radially — a smooth inward decay plus a couple of radial modes that
+vanish at both the inner and outer boundaries.  So the structures curve with
+the spherical shell (concentric annuli on the equatorial cut, arcs on the
+meridional walls) instead of forming vertical columns, and the cross-sections
+still join the surface colours seamlessly at the outer rim (decay → 1, modes
+→ 0 there).
+
+Everything that must occlude everything else (outer surface, inner core, the
+three cut faces) is emitted into a *single* Poly3DCollection so matplotlib
+depth-sorts all polygons together — the only reliable way to get correct
+occlusion between separate 3-D surfaces in matplotlib.
 """
 
 import numpy as np
@@ -14,352 +33,371 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from mpl_toolkits.mplot3d import Axes3D          # noqa: F401
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from scipy.interpolate import RegularGridInterpolator
 
-from config import IMG_SIZE, CUTAWAY_FRACTION, N_RADIAL, LMAX
+from config import (IMG_SIZE, LMAX, R_INNER, R_OUTER, R_MID,
+                    CUTAWAY_LON_START, CUTAWAY_LON_END,
+                    N_RADIAL, N_ANG, SURFACE_DS, VIEW_ELEV, VIEW_AZIM)
+
+
+# ── colormap ────────────────────────────────────────────────────────────────
+CMAP = plt.cm.RdBu_r                     # red = +ω_z, blue = −ω_z
+
+LIGHT_DIR = None                         # set from the camera each frame
+
+
+def _to_rgba(vals, vmax):
+    """Field values → RGBA via the diverging colormap, clamped to ±vmax."""
+    normed = (np.clip(vals / (vmax + 1e-12), -1.0, 1.0) + 1.0) / 2.0
+    return CMAP(normed)
+
+
+# ── inner-core convection field (low degree, l = 2…6) ─────────────────────
+CORE_LMAX      = 6      # only large-scale, slow modes in the calmer inner region
+CORE_AMP       = 0.60   # colour amplitude relative to the surface (paler = calmer)
+CORE_DRIFT_DEG = 0.35   # slow westward drift per frame → gentle inner motion
+_CORE_CACHE    = {}     # {'sample', 'vmax'} built lazily on first frame
+
+
+def _core_field():
+    """
+    Build (once) a static low-degree vorticity field on the core surface to
+    stand in for slower, larger-scale convection in the inner region.  Returns
+    a (sample, vmax) pair where sample(lat, lon) interpolates the field.
+    """
+    if _CORE_CACHE:
+        return _CORE_CACHE['sample'], _CORE_CACHE['vmax']
+
+    import pyshtools as pysh
+    rng = np.random.default_rng(7)
+    arr = np.zeros((2, CORE_LMAX + 1, CORE_LMAX + 1))
+    for l in range(2, CORE_LMAX + 1):
+        for m in range(l + 1):
+            amp = 1.0 / l                      # redder tilt toward the largest scales
+            arr[0, l, m] = rng.standard_normal() * amp
+            if m > 0:
+                arr[1, l, m] = rng.standard_normal() * amp
+    coeffs = pysh.SHCoeffs.from_array(arr, normalization='4pi', csphase=1)
+    g = coeffs.expand(grid='DH2')
+    sample = make_sampler(g.data, g.lats(), g.lons())
+    vmax = np.percentile(np.abs(g.data), 97) + 1e-12
+    _CORE_CACHE['sample'] = sample
+    _CORE_CACHE['vmax'] = vmax
+    return sample, vmax
 
 
 # ── grid coordinates ──────────────────────────────────────────────────────
-
 def latlon_grid():
-    """Return (lats, lons) arrays matching the DH2 pyshtools grid at LMAX."""
+    """(lats, lons) of the DH2 pyshtools grid at LMAX."""
     import pyshtools as pysh
     dummy = pysh.SHCoeffs.from_zeros(LMAX, normalization='4pi')
     g = dummy.expand(grid='DH2')
     return g.lats(), g.lons()
 
 
-# ── cutaway geometry ──────────────────────────────────────────────────────
-
-CUTAWAY_LON_START = 0.0
-CUTAWAY_LON_END   = CUTAWAY_FRACTION * 360.0   # 90° for a quarter wedge
-
-
-def _in_cutaway(lon_deg):
-    lon = np.asarray(lon_deg) % 360.0
-    return (lon >= CUTAWAY_LON_START) & (lon < CUTAWAY_LON_END)
-
-
-# ── colormap helpers ──────────────────────────────────────────────────────
-
-CMAP = plt.cm.RdBu_r   # red = +ω, blue = −ω
-
-
-def _to_rgba(vals, vmax):
-    """vals (any shape) → same-shape RGBA array, range clamped to ±vmax."""
-    normed = (np.clip(vals / (vmax + 1e-12), -1.0, 1.0) + 1.0) / 2.0
-    return CMAP(normed)
-
-
-# ── interpolation helper ──────────────────────────────────────────────────
-
-def _interp_lon(lon_arr, field_1d, target_lon_deg):
+# ── surface-field sampler (bilinear, longitude-periodic) ──────────────────
+def make_sampler(surface_field, lat, lon):
     """
-    Interpolate a 1-D field (defined on lon_arr) at target_lon_deg.
-    Wraps around [0, 360).
+    Return sample(lat_q, lon_q) → interpolated surface value.
+    Latitudes in degrees [-90, 90], longitudes in degrees (wrapped mod 360).
     """
-    from scipy.interpolate import interp1d
-    lon_src = np.array(lon_arr) % 360.0
-    # Extend to handle wrap-around
-    lon_ext = np.concatenate([lon_src - 360.0, lon_src, lon_src + 360.0])
-    f_ext   = np.concatenate([field_1d, field_1d, field_1d])
-    fn = interp1d(lon_ext, f_ext, kind='linear', bounds_error=False,
-                  fill_value=0.0)
-    return fn(np.asarray(target_lon_deg))
+    lat = np.asarray(lat, float)
+    lon = np.asarray(lon, float)
+    order = np.argsort(lat)
+    lat_s = lat[order]
+    fld = surface_field[order, :]
+    # pyshtools DH grids carry a redundant 360°(=0°) column — drop it, then
+    # re-append a single wrap column so 359°→0° interpolates smoothly.
+    if lon[-1] >= 360.0 - 1e-6:
+        lon = lon[:-1]
+        fld = fld[:, :-1]
+    lon_ext = np.concatenate([lon, [360.0]])
+    fld_ext = np.concatenate([fld, fld[:, :1]], axis=1)
+    interp = RegularGridInterpolator((lat_s, lon_ext), fld_ext,
+                                     bounds_error=False, fill_value=None)
+
+    def sample(lat_q, lon_q):
+        la = np.clip(np.asarray(lat_q, float), -90.0, 90.0)
+        lo = np.mod(np.asarray(lon_q, float), 360.0)
+        pts = np.stack([la, lo], axis=-1)
+        return interp(pts)
+
+    return sample
 
 
-# ── Poly3DCollection helpers ──────────────────────────────────────────────
-
-def _quads_to_poly(X, Y, Z, fc_rgba):
+def spherical_field(sample, X, Y, Z):
     """
-    Convert a (m,n) mesh of vertex positions + (m-1,n-1,4) face colors
-    into a Poly3DCollection of quads.
+    Spherical-shell interior: sample the surface at the SAME colatitude and
+    longitude as the interior point (r, θ, φ), then modulate radially.
 
-    X, Y, Z : (m, n) vertex arrays
-    fc_rgba : (m-1, n-1, 4) RGBA face colors
+    The radial modulation is  decay(r) · (1 + modes(r, θ))  where
+
+        decay  = (r / R_OUTER)**2            — smooth inward fade
+        modes  = Σ aₖ sin(kπ ξ) · cos(nₖ θ)  — a few radial cells,
+                 ξ = (r − R_INNER)/(R_OUTER − R_INNER) ∈ [0, 1]
+
+    Because sin(kπ ξ) vanishes at ξ = 0 and ξ = 1, the modes die at both the
+    inner core and the outer rim: at the rim decay → 1 and modes → 0, so the
+    face joins the coloured surface seamlessly, while the mid-shell carries
+    extra radial structure so the section is not a mere rescaled copy of the
+    surface.  Latitude-dependent mode amplitudes keep the cells from looking
+    like uniform rings; the pattern follows the spherical geometry.
     """
-    m, n = X.shape
-    verts  = []
-    colors = []
-    for i in range(m - 1):
-        for j in range(n - 1):
-            quad = [
-                (X[i,   j  ], Y[i,   j  ], Z[i,   j  ]),
-                (X[i+1, j  ], Y[i+1, j  ], Z[i+1, j  ]),
-                (X[i+1, j+1], Y[i+1, j+1], Z[i+1, j+1]),
-                (X[i,   j+1], Y[i,   j+1], Z[i,   j+1]),
-            ]
-            verts.append(quad)
-            colors.append(fc_rgba[i, j])
-    pc = Poly3DCollection(verts, linewidths=0)
-    pc.set_facecolor(colors)
-    pc.set_edgecolor('none')
-    return pc
+    r = np.sqrt(X * X + Y * Y + Z * Z)
+    r = np.maximum(r, 1e-9)
+    lat = np.degrees(np.arcsin(np.clip(Z / r, -1.0, 1.0)))
+    lon_p = np.degrees(np.arctan2(Y, X))
+    surf = sample(lat, lon_p)
+
+    xi = np.clip((r - R_INNER) / (R_OUTER - R_INNER), 0.0, 1.0)   # 0 … 1
+    decay = (r / R_OUTER) ** 2
+    rad = np.radians(lat)
+    modes = (0.32 * np.sin(2.0 * np.pi * xi) * np.cos(rad)
+             + 0.18 * np.sin(3.0 * np.pi * xi) * np.cos(2.0 * rad))
+    return surf * decay * (1.0 + modes)
 
 
-# ── Taylor-Proudman interior ──────────────────────────────────────────────
+# ── vectorised mesh → quads ────────────────────────────────────────────────
+def _mesh_quads(X, Y, Z):
+    """(m,n) vertex mesh → (K,4,3) quad-vertex array, K = (m-1)(n-1)."""
+    P = np.stack([X, Y, Z], axis=-1)                 # (m,n,3)
+    v0 = P[:-1, :-1]; v1 = P[1:, :-1]
+    v2 = P[1:, 1:];   v3 = P[:-1, 1:]
+    quads = np.stack([v0, v1, v2, v3], axis=2)       # (m-1,n-1,4,3)
+    return quads.reshape(-1, 4, 3)
 
-def _tp_interior(surface_col, lat_deg, r_grid):
+
+def _node_to_face(C):
+    """(m,n) node field → (m-1,n-1) face field (mean of the 4 corners)."""
+    return 0.25 * (C[:-1, :-1] + C[1:, :-1] + C[1:, 1:] + C[:-1, 1:])
+
+
+# ── individual surfaces (each returns verts (K,4,3), rgba (K,4)) ───────────
+def _outer_surface(sample, vmax):
+    """Coloured outer sphere with the octant hole-punched out."""
+    lat = np.linspace(90.0, -90.0, 2 * (LMAX + 1))[::SURFACE_DS]
+    lon = np.linspace(0.0, 360.0, 4 * (LMAX + 1) + 1)[::SURFACE_DS]
+    LO, LA = np.meshgrid(lon, lat)                   # (m,n)
+    phi = np.radians(LA); lam = np.radians(LO)
+    X = R_OUTER * np.cos(phi) * np.cos(lam)
+    Y = R_OUTER * np.cos(phi) * np.sin(lam)
+    Z = R_OUTER * np.sin(phi)
+
+    field = sample(LA, LO)
+    verts = _mesh_quads(X, Y, Z)
+    rgba = _to_rgba(_node_to_face(field), vmax).reshape(-1, 4)
+
+    # drop faces whose centre lies in the removed octant (lon<90 & lat>0)
+    loc = _node_to_face(LO); lac = _node_to_face(LA)
+    removed = (loc >= CUTAWAY_LON_START) & (loc < CUTAWAY_LON_END) & (lac > 0.0)
+    keep = ~removed.reshape(-1)
+    return verts[keep], rgba[keep]
+
+
+def _equatorial_face(sample, vmax):
+    """z = 0 quarter-annulus under the removed wedge, r ∈ [R_INNER, R_OUTER]."""
+    r = np.linspace(R_INNER, R_OUTER, N_RADIAL + 1)
+    lam = np.radians(np.linspace(CUTAWAY_LON_START, CUTAWAY_LON_END, N_ANG + 1))
+    R, LAM = np.meshgrid(r, lam)                     # (n_ang+1, n_r+1)
+    X = R * np.cos(LAM); Y = R * np.sin(LAM); Z = np.zeros_like(R)
+
+    field = spherical_field(sample, X, Y, Z)
+    verts = _mesh_quads(X, Y, Z)
+    rgba = _to_rgba(_node_to_face(field), vmax).reshape(-1, 4)
+    return verts, rgba
+
+
+def _meridional_face(sample, vmax, lon_deg):
+    """Upper-half meridional wall at fixed longitude, r ∈ [R_INNER, R_OUTER]."""
+    r = np.linspace(R_INNER, R_OUTER, N_RADIAL + 1)
+    lat = np.linspace(0.0, 90.0, N_ANG + 1)
+    R, LA = np.meshgrid(r, lat)                      # (n_ang+1, n_r+1)
+    phi = np.radians(LA); lam = np.radians(lon_deg)
+    X = R * np.cos(phi) * np.cos(lam)
+    Y = R * np.cos(phi) * np.sin(lam)
+    Z = R * np.sin(phi)
+
+    field = spherical_field(sample, X, Y, Z)
+    verts = _mesh_quads(X, Y, Z)
+    rgba = _to_rgba(_node_to_face(field), vmax).reshape(-1, 4)
+    return verts, rgba
+
+
+def _inner_core(cam, frame_idx=0):
     """
-    Approximate interior vorticity using Taylor-Proudman columnar flow.
-
-    surface_col : (nlat,)  surface vorticity along one longitude
-    lat_deg     : (nlat,)  latitudes in degrees
-    r_grid      : (nlat, nr) radius values (0…1)
-
-    Returns field of same shape as r_grid.
+    Inner-core sphere (radius R_INNER) coloured by a slow, low-degree
+    vorticity field — a smaller, calmer version of the outer convection —
+    with lambert shading retained for 3-D form.
     """
-    sin_phi = np.sin(np.radians(lat_deg))[:, None]   # (nlat,1)
-    # Damp inside tangent cylinder (|sinφ| > r)
-    mask = np.where(
-        np.abs(sin_phi) > r_grid,
-        np.exp(-6.0 * (np.abs(sin_phi) - r_grid)),
-        1.0
-    )
-    field_2d = surface_col[:, None] * mask * r_grid**1.2
-    return field_2d
+    u = np.linspace(0, 2 * np.pi, 97)
+    v = np.linspace(0, np.pi, 49)
+    U, V = np.meshgrid(u, v)
+    nx = np.sin(V) * np.cos(U); ny = np.sin(V) * np.sin(U); nz = np.cos(V)
+    X = R_INNER * nx; Y = R_INNER * ny; Z = R_INNER * nz
+
+    # sample the low-degree core field (with a slow longitudinal drift for
+    # gentle animation), reduced amplitude → paler, calmer colours
+    core_sample, core_vmax = _core_field()
+    lat = np.degrees(np.arcsin(np.clip(nz, -1.0, 1.0)))
+    lon = np.degrees(np.arctan2(ny, nx)) - frame_idx * CORE_DRIFT_DEG
+    field = _node_to_face(core_sample(lat, lon))
+    rgb = _to_rgba(field, core_vmax / CORE_AMP)[:, :, :3]
+
+    # cheap lambert shading from the camera direction
+    ndot = _node_to_face(nx) * cam[0] + _node_to_face(ny) * cam[1] \
+        + _node_to_face(nz) * cam[2]
+    shade = 0.55 + 0.45 * np.clip(ndot, 0.0, 1.0)
+    rgb = rgb * shade[:, :, None]
+    rgba = np.concatenate([rgb, np.ones((*shade.shape, 1))], axis=-1)
+
+    verts = _mesh_quads(X, Y, Z)
+    return verts, rgba.reshape(-1, 4)
 
 
-# ── cross-section renderers ───────────────────────────────────────────────
-
-def _draw_equatorial_slice(ax, surface_field, vmax, lat, lon):
-    """
-    Filled disc at z=0 covering the cutaway wedge, coloured by vorticity.
-    Uses Poly3DCollection so depth-sorting artefacts don't hide it.
-    """
-    n_r    = N_RADIAL
-    n_phi  = 64      # angular resolution inside wedge
-
-    r_vals   = np.linspace(0.0, 1.0, n_r + 1)
-    lam_vals = np.linspace(np.radians(CUTAWAY_LON_START),
-                            np.radians(CUTAWAY_LON_END), n_phi + 1)
-
-    # Equatorial strip from surface field (average the two rows nearest lat=0)
-    eq_idx = np.argmin(np.abs(np.array(lat)))
-    eq_surface = surface_field[eq_idx, :]   # (nlon,)
-
-    # Build vertex mesh (n_phi+1) × (n_r+1)
-    R_v, LAM_v = np.meshgrid(r_vals, lam_vals, indexing='ij')   # (nr+1, nphi+1)
-    X_v = R_v * np.cos(LAM_v)
-    Y_v = R_v * np.sin(LAM_v)
-    Z_v = np.zeros_like(R_v)
-
-    # Face-centre radii and lons
-    r_c   = 0.5 * (r_vals[:-1] + r_vals[1:])          # (nr,)
-    lam_c = 0.5 * (lam_vals[:-1] + lam_vals[1:])      # (nphi,)
-    R_c, LAM_c = np.meshgrid(r_c, lam_c, indexing='ij')   # (nr, nphi)
-
-    lon_c_deg = np.degrees(LAM_c) % 360.0
-    # Interpolate surface field to face centres
-    surf_c = _interp_lon(lon, eq_surface, lon_c_deg)    # (nr, nphi)
-    # Radial decay
-    field_c = surf_c * R_c**1.2
-
-    fc_rgba = _to_rgba(field_c, vmax)                   # (nr, nphi, 4)
-
-    pc = _quads_to_poly(X_v.T, Y_v.T, Z_v.T, fc_rgba.transpose(1, 0, 2))
-    ax.add_collection3d(pc)
+# ── boundary curves on the three cut planes ───────────────────────────────
+def _arc_equator(radius, n=80):
+    lam = np.radians(np.linspace(CUTAWAY_LON_START, CUTAWAY_LON_END, n))
+    return radius * np.cos(lam), radius * np.sin(lam), np.zeros(n)
 
 
-def _draw_meridional_slice(ax, surface_field, vmax, lat, lon):
-    """
-    Two flat semicircle faces (the boundary planes of the wedge),
-    coloured by vorticity (Taylor-Proudman interior).
-    """
-    n_r   = N_RADIAL
-    n_lat = 64
-
-    r_vals  = np.linspace(0.0, 1.0, n_r + 1)
-    lat_v   = np.linspace(-90.0, 90.0, n_lat + 1)
-    lat_c   = 0.5 * (lat_v[:-1] + lat_v[1:])
-    r_c     = 0.5 * (r_vals[:-1] + r_vals[1:])
-
-    for lon_slice_deg in [CUTAWAY_LON_START, CUTAWAY_LON_END]:
-        lam_s = np.radians(lon_slice_deg)
-        lon_s_deg = lon_slice_deg % 360.0
-
-        # Surface field along this meridian
-        mer_surface = np.array([
-            _interp_lon(lon, surface_field[i, :], lon_s_deg)
-            for i in range(len(lat))
-        ])   # (nlat_grid,)
-
-        # Interpolate onto fine lat grid
-        from scipy.interpolate import interp1d
-        lat_arr = np.array(lat)
-        sort_idx = np.argsort(lat_arr)
-        f_lat = interp1d(lat_arr[sort_idx], mer_surface[sort_idx],
-                         kind='linear', bounds_error=False, fill_value=0.0)
-        mer_c_surface = f_lat(lat_c)   # (n_lat,)
-
-        # Build vertex mesh (n_lat+1) × (n_r+1)
-        LAT_v, R_v = np.meshgrid(lat_v, r_vals, indexing='ij')  # (nlat+1,nr+1)
-        phi_v = np.radians(LAT_v)
-        X_v = R_v * np.cos(phi_v) * np.cos(lam_s)
-        Y_v = R_v * np.cos(phi_v) * np.sin(lam_s)
-        Z_v = R_v * np.sin(phi_v)
-
-        # Face-centre field with Taylor-Proudman decay
-        LAT_c2, R_c2 = np.meshgrid(lat_c, r_c, indexing='ij')  # (nlat,nr)
-        field_c = _tp_interior(mer_c_surface, lat_c, R_c2)       # (nlat,nr)
-
-        fc_rgba = _to_rgba(field_c, vmax)   # (nlat,nr,4)
-
-        pc = _quads_to_poly(X_v, Y_v, Z_v, fc_rgba)
-        ax.add_collection3d(pc)
+def _arc_meridian(radius, lon_deg, n=80):
+    phi = np.radians(np.linspace(0.0, 90.0, n))
+    lam = np.radians(lon_deg)
+    return (radius * np.cos(phi) * np.cos(lam),
+            radius * np.cos(phi) * np.sin(lam),
+            radius * np.sin(phi))
 
 
-# ── cutaway edge lines ────────────────────────────────────────────────────
+def _draw_boundaries(ax):
+    """Thick black inner-core + rim edges; thin grey intermediate layer."""
+    zt = 12
+    # inner-core boundary (thick black) on all three planes
+    for xyz in (_arc_equator(R_INNER),
+                _arc_meridian(R_INNER, CUTAWAY_LON_START),
+                _arc_meridian(R_INNER, CUTAWAY_LON_END)):
+        ax.plot(*xyz, color='black', lw=2.1, zorder=zt)
 
-def _draw_cutaway_edges(ax):
-    """Rim arcs, bounding radii, and rotation-axis line."""
-    c = '0.25'
-    lw = 0.7
+    # outer rim of the opening (medium black)
+    for xyz in (_arc_equator(R_OUTER),
+                _arc_meridian(R_OUTER, CUTAWAY_LON_START),
+                _arc_meridian(R_OUTER, CUTAWAY_LON_END)):
+        ax.plot(*xyz, color='0.1', lw=1.1, zorder=zt)
 
-    # Equator arc along the cutaway wedge boundary
-    lam = np.linspace(np.radians(CUTAWAY_LON_START),
-                       np.radians(CUTAWAY_LON_END), 90)
-    ax.plot(np.cos(lam), np.sin(lam), np.zeros(len(lam)),
-            color=c, lw=lw, zorder=6)
+    # one intermediate layer boundary (thin grey)
+    for xyz in (_arc_equator(R_MID),
+                _arc_meridian(R_MID, CUTAWAY_LON_START),
+                _arc_meridian(R_MID, CUTAWAY_LON_END)):
+        ax.plot(*xyz, color='0.35', lw=0.7, zorder=zt)
 
-    # Two radial lines from centre to sphere at equator (wedge edges)
-    for lon_d in [CUTAWAY_LON_START, CUTAWAY_LON_END]:
-        lam_d = np.radians(lon_d)
-        ax.plot([0, np.cos(lam_d)], [0, np.sin(lam_d)], [0, 0],
-                color=c, lw=lw, zorder=6)
-
-    # Rotation axis
-    ax.plot([0, 0], [0, 0], [-1.05, 1.05],
-            color=c, lw=0.5, linestyle='--', zorder=6)
-
-
-# ── grid lines ────────────────────────────────────────────────────────────
-
-def _draw_grid_lines(ax):
-    lw_s = 0.45   # solid (visible)
-    lw_d = 0.25   # dashed (hidden / inside cutaway)
-    c_s  = '0.3'
-    c_d  = '0.6'
-
-    n_seg = 720
-
-    # Parallels every 30°
-    for lat_line in range(-60, 91, 30):
-        phi_l = np.radians(lat_line)
-        lam_l = np.linspace(0, 2*np.pi, n_seg, endpoint=False)
-        xl = np.cos(phi_l) * np.cos(lam_l)
-        yl = np.cos(phi_l) * np.sin(lam_l)
-        zl = np.sin(phi_l) * np.ones(n_seg)
-        lon_l = np.degrees(lam_l) % 360.0
-        in_cut = _in_cutaway(lon_l)
-        _segmented_line(ax, xl, yl, zl, in_cut, c_s, c_d, lw_s, lw_d)
-
-    # Meridians every 30°
-    for lon_line in range(0, 360, 30):
-        lam_l = np.radians(lon_line)
-        phi_l = np.linspace(-np.pi/2, np.pi/2, 360)
-        xl = np.cos(phi_l) * np.cos(lam_l)
-        yl = np.cos(phi_l) * np.sin(lam_l)
-        zl = np.sin(phi_l)
-        if _in_cutaway(lon_line):
-            ax.plot(xl, yl, zl, color=c_d, lw=lw_d, linestyle='--', zorder=2)
-        else:
-            ax.plot(xl, yl, zl, color=c_s, lw=lw_s, linestyle='-', zorder=2)
+    # radial edges framing the opening (equator, both meridians; + polar axis)
+    for lon_d in (CUTAWAY_LON_START, CUTAWAY_LON_END):
+        lam = np.radians(lon_d)
+        ax.plot([R_INNER * np.cos(lam), R_OUTER * np.cos(lam)],
+                [R_INNER * np.sin(lam), R_OUTER * np.sin(lam)],
+                [0, 0], color='0.1', lw=1.0, zorder=zt)
+    ax.plot([0, 0], [0, 0], [R_INNER, R_OUTER], color='0.1', lw=1.0, zorder=zt)
 
 
-def _segmented_line(ax, x, y, z, mask_dashed, c_solid, c_dash, lw_s, lw_d):
-    n = len(x)
-    i = 0
-    while i < n:
-        j = i
-        d = bool(mask_dashed[i])
-        while j < n and bool(mask_dashed[j]) == d:
-            j += 1
-        seg = slice(i, j)
-        if d:
-            ax.plot(x[seg], y[seg], z[seg], color=c_dash,  lw=lw_d, ls='--', zorder=2)
-        else:
-            ax.plot(x[seg], y[seg], z[seg], color=c_solid, lw=lw_s, ls='-',  zorder=2)
-        i = j
+# ── latitude / longitude graticule (solid = visible, dashed = hidden) ──────
+def _draw_graticule(ax, cam):
+    n = 400
+    solid = dict(color='0.12', lw=0.55, ls='-', zorder=11)
+    dash = dict(color='0.45', lw=0.4, ls=(0, (3, 3)), alpha=0.28, zorder=10)
+
+    def emit(x, y, z):
+        pos = np.stack([x, y, z], axis=1)
+        lon_d = np.degrees(np.arctan2(y, x)) % 360.0
+        removed = (lon_d >= CUTAWAY_LON_START) & (lon_d < CUTAWAY_LON_END) & (z > 0)
+        visible = (pos @ cam) > 0.0
+        # state: 0 skip(removed), 1 solid(visible), 2 dashed(hidden)
+        state = np.where(removed, 0, np.where(visible, 1, 2))
+        i = 0
+        while i < len(state):
+            s = state[i]; j = i
+            while j < len(state) and state[j] == s:
+                j += 1
+            if s and j - i > 1:
+                seg = slice(i, j)
+                ax.plot(x[seg], y[seg], z[seg], **(solid if s == 1 else dash))
+            i = j
+
+    for lat_line in range(-60, 90, 30):               # parallels
+        phi = np.radians(lat_line)
+        lam = np.linspace(0, 2 * np.pi, n)
+        emit(R_OUTER * np.cos(phi) * np.cos(lam),
+             R_OUTER * np.cos(phi) * np.sin(lam),
+             R_OUTER * np.sin(phi) * np.ones(n))
+    for lon_line in range(0, 360, 30):                # meridians
+        lam = np.radians(lon_line)
+        phi = np.linspace(-np.pi / 2, np.pi / 2, n)
+        emit(R_OUTER * np.cos(phi) * np.cos(lam),
+             R_OUTER * np.cos(phi) * np.sin(lam),
+             R_OUTER * np.sin(phi))
 
 
 # ── main render function ──────────────────────────────────────────────────
-
 def render_frame(surface_field, frame_idx, total_frames, t_val,
                  figsize_px=None):
     if figsize_px is None:
         figsize_px = IMG_SIZE
+    dpi = 100
+    fig = plt.figure(figsize=(figsize_px / dpi, figsize_px / dpi),
+                     dpi=dpi, facecolor='white')
+    ax = fig.add_subplot(111, projection='3d', facecolor='white',
+                         computed_zorder=False)
 
-    dpi   = 100
-    fig   = plt.figure(figsize=(figsize_px/dpi, figsize_px/dpi),
-                        dpi=dpi, facecolor='white')
-    ax    = fig.add_subplot(111, projection='3d', facecolor='white')
-
-    vmax  = np.percentile(np.abs(surface_field), 97) + 1e-12
+    vmax = np.percentile(np.abs(surface_field), 97) + 1e-12
     lat, lon = latlon_grid()
+    sample = make_sampler(surface_field, lat, lon)
 
-    # ── outer sphere (hole-punched with NaN in cutaway) ──────────────────
-    phi_arr = np.radians(lat)
-    lam_arr = np.radians(lon)
-    PHI, LAM = np.meshgrid(phi_arr, lam_arr, indexing='ij')   # (nlat,nlon)
+    # camera direction (origin → camera), for shading + graticule visibility
+    er, ar = np.radians(VIEW_ELEV), np.radians(VIEW_AZIM)
+    cam = np.array([np.cos(er) * np.cos(ar), np.cos(er) * np.sin(ar), np.sin(er)])
 
-    X = np.cos(PHI) * np.cos(LAM)
-    Y = np.cos(PHI) * np.sin(LAM)
-    Z = np.sin(PHI)
+    # ── one combined Poly3DCollection so everything depth-sorts together ──
+    verts_all, rgba_all = [], []
+    for v, c in (_outer_surface(sample, vmax),
+                 _equatorial_face(sample, vmax),
+                 _meridional_face(sample, vmax, CUTAWAY_LON_START),
+                 _meridional_face(sample, vmax, CUTAWAY_LON_END),
+                 _inner_core(cam, frame_idx)):
+        verts_all.append(v); rgba_all.append(c)
+    verts = np.concatenate(verts_all, axis=0)
+    rgba = np.concatenate(rgba_all, axis=0)
 
-    lon_grid = np.degrees(LAM) % 360.0
-    cut_mask = _in_cutaway(lon_grid)   # True = remove
+    pc = Poly3DCollection(verts, facecolors=rgba, edgecolors='none',
+                          linewidths=0, shade=False, zsort='average')
+    pc.set_zorder(1)
+    ax.add_collection3d(pc)
 
-    # NaN in position arrays → matplotlib skips those quads entirely
-    X_plot = np.where(cut_mask, np.nan, X)
-    Y_plot = np.where(cut_mask, np.nan, Y)
-    Z_plot = np.where(cut_mask, np.nan, Z)
+    # ── crisp boundary curves + graticule on top ─────────────────────────
+    _draw_boundaries(ax)
+    _draw_graticule(ax, cam)
+    ax.plot([0, 0], [0, 0], [-1.18, 1.18], color='0.4', lw=0.5,
+            ls=(0, (4, 4)), zorder=9)                 # rotation axis
 
-    field_norm = _normalise(surface_field, vmax)
-    fcolors    = CMAP((field_norm + 1.0) / 2.0)   # (nlat,nlon,4)
-
-    ds = 2   # downsample factor for speed
-    ax.plot_surface(X_plot[::ds, ::ds], Y_plot[::ds, ::ds], Z_plot[::ds, ::ds],
-                    facecolors=fcolors[::ds, ::ds],
-                    rstride=1, cstride=1,
-                    linewidth=0, antialiased=False, shade=False)
-
-    # ── cross-section slices ─────────────────────────────────────────────
-    _draw_equatorial_slice(ax, surface_field, vmax, lat, lon)
-    _draw_meridional_slice(ax, surface_field, vmax, lat, lon)
-
-    # ── cutaway edges + grid ─────────────────────────────────────────────
-    _draw_cutaway_edges(ax)
-    _draw_grid_lines(ax)
-
-    # ── view / axes ───────────────────────────────────────────────────────
-    ax.set_xlim(-1.3, 1.3)
-    ax.set_ylim(-1.3, 1.3)
-    ax.set_zlim(-1.3, 1.3)
+    # ── view / framing ────────────────────────────────────────────────────
+    lim = 1.02
+    ax.set_xlim(-lim, lim); ax.set_ylim(-lim, lim); ax.set_zlim(-lim, lim)
     ax.set_box_aspect([1, 1, 1])
     ax.set_axis_off()
-    ax.view_init(elev=25, azim=45)
+    ax.view_init(elev=VIEW_ELEV, azim=VIEW_AZIM)
 
-    # Colorbar
+    # colorbar + title
     sm = plt.cm.ScalarMappable(cmap=CMAP, norm=mcolors.Normalize(-vmax, vmax))
     sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax, shrink=0.48, pad=0.02, fraction=0.03)
-    cbar.set_label(r"$\omega'_z$", fontsize=9)
-    cbar.ax.tick_params(labelsize=7)
-
-    fig.suptitle(r"$\omega'_z$" + f"        t = {t_val:7.1f}",
-                 fontsize=11, y=0.97)
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    cbar = fig.colorbar(sm, ax=ax, shrink=0.5, pad=0.0, fraction=0.03)
+    cbar.set_label(r"$\omega'_z$", fontsize=11)
+    cbar.ax.tick_params(labelsize=8)
+    fig.text(0.46, 0.94, "Rotating spherical-shell convection",
+             ha='center', fontsize=13)
+    fig.text(0.46, 0.90, rf"$\omega'_z$      t = {t_val:6.1f}",
+             ha='center', fontsize=10, color='0.25')
+    fig.subplots_adjust(left=-0.02, right=0.92, bottom=-0.02, top=0.92)
     return fig
 
 
-# ── normalise helper (local, not exported) ───────────────────────────────
-
-def _normalise(field, vmax):
-    return np.clip(field / vmax, -1.0, 1.0)
-
-
 # ── figure → RGB ─────────────────────────────────────────────────────────
-
 def fig_to_rgb(fig):
     fig.canvas.draw()
     buf = fig.canvas.buffer_rgba()

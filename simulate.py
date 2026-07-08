@@ -13,7 +13,7 @@ F = stochastic forcing at convective scales
 import numpy as np
 import pyshtools as pysh
 
-from config import (OMEGA, LMAX, NU_HYPER, FORCE_LMIN, FORCE_LMAX,
+from config import (OMEGA, LMAX, NU_HYPER, LINEAR_DRAG, FORCE_LMIN, FORCE_LMAX,
                     FORCE_AMP, DT, N_SPINUP, N_FRAMES, FRAME_SKIP)
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -26,14 +26,23 @@ def _laplacian_eigenvalues(lmax):
     return ev
 
 
-def _hyperviscosity_filter(lmax, nu, dt):
+def _dissipation_filter(lmax, nu, drag, dt):
     """
-    Implicit integrating factor for hyperviscosity: exp(ν λ^4 dt)
-    where λ = l(l+1).  Returns multiplicative coefficient array shaped (2,L+1,L+1).
+    Implicit integrating factor for dissipation each step:
+
+        exp( -(drag + ν λ^4) dt )     with  λ = l(l+1).
+
+    • ν λ^4  is scale-selective ∇^8 hyperviscosity — it bites only near the
+      truncation, setting the small-scale (filament) cutoff.
+    • drag is uniform linear (Rayleigh) friction — it removes energy from the
+      large scales so the forced-dissipative turbulence reaches a statistically
+      steady, filamentary state instead of an ever-growing condensate.
+
+    Returns a multiplicative coefficient array shaped (2, L+1, L+1).
     """
     ev = _laplacian_eigenvalues(lmax)   # negative
     lam4 = ev**4                         # positive (negative^4 = positive)
-    return np.exp(-nu * lam4 * dt)
+    return np.exp(-(drag + nu * lam4) * dt)
 
 
 class SpectralVorticity:
@@ -45,7 +54,7 @@ class SpectralVorticity:
     def __init__(self):
         self.lmax = LMAX
         self._ev   = _laplacian_eigenvalues(self.lmax)      # shape (2,L+1,L+1)
-        self._visc = _hyperviscosity_filter(self.lmax, NU_HYPER, DT)
+        self._visc = _dissipation_filter(self.lmax, NU_HYPER, LINEAR_DRAG, DT)
 
         # Inverse Laplacian eigenvalues (ψ = ∇⁻² ω); l=0 mode is 0
         self._inv_ev = np.zeros_like(self._ev)
