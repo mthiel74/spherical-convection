@@ -18,19 +18,11 @@ WindowFrame->Normal*)
 
 (* Beginning of Notebook Content *)
 Notebook[{
-Cell["Rotating Convection in a Spherical Shell", "Title",ExpressionUUID->"ec41673b-6ddd-4dd4-823d-4f380bb29684"],
+Cell["2-D Barotropic Vorticity on a Rotating Sphere", "Title",ExpressionUUID->"ec41673b-6ddd-4dd4-823d-4f380bb29684"],
 
-Cell["A spectral barotropic model of the solar convection zone", "Subtitle",ExpressionUUID->"0f09935b-fa91-4f09-b774-cccae98131b7"],
+Cell["A spectral 2-D turbulence model \[Dash] motivated by, but not a model of, solar convection", "Subtitle",ExpressionUUID->"0f09935b-fa91-4f09-b774-cccae98131b7"],
 
-Cell["\<\
-This notebook accompanies a Python simulation that solves the barotropic \
-vorticity equation on a rotating sphere with a spherical-harmonic (spectral) \
-method. It is meant as a self-contained tutorial: the physics of solar \
-convection, the mathematics of vorticity dynamics on a rotating sphere, the \
-dimensionless numbers that govern the regime, the numerics of the spectral \
-solver, and the geometry behind the 3-D cutaway visualisation. Every code \
-cell is standalone \[Dash] evaluate them in any order.\
-\>", "Text",ExpressionUUID->"f90bbf2a-a2e4-4567-ae69-e49bf9a5eef7"],
+Cell["This notebook accompanies the Python simulation simulate_v6.py, which solves the 2-D barotropic vorticity equation on a rotating sphere with a spherical-harmonic (spectral) method. Be clear at the outset about what it is and what it is not. It is NOT a convection model: it has no buoyancy, no energy (temperature) equation, no vertical velocity, and no radial dimension. What it shares with solar convection is only the rotating-sphere geometry and the kinematics of forced two-dimensional turbulence. Solar convection appears in this notebook as motivation and as the source of that geometry; the dynamics the model actually solves are those of a single scalar vorticity field, stirred by a stochastic forcing that stands in \[Dash] kinematically, not physically \[Dash] for the stirring that convection would provide. Read as a self-contained tutorial: the motivating physics of solar convection, the mathematics of barotropic vorticity on a rotating sphere, the relevant dimensionless numbers, the numerics of the spectral solver, and the geometry behind the 3-D cutaway visualisation. Every code cell is standalone \[Dash] evaluate them in any order.", "Text",ExpressionUUID->"f90bbf2a-a2e4-4567-ae69-e49bf9a5eef7"],
 
 Cell["\<\
 Colour convention throughout: red = cyclonic (positive vertical vorticity), \
@@ -82,30 +74,13 @@ visible tops of convective cells.\
 
 Cell["1.2  The three key ingredients", "Subsection",ExpressionUUID->"b017ba07-b44e-4427-a5d7-14894ee8847d"],
 
-Cell["\<\
-The model in this notebook keeps three pieces of physics that dominate the \
-large-scale dynamics and drops everything else:\
-\>", "Text",ExpressionUUID->"68787d25-1a90-4449-9c20-47cab08dd816"],
+Cell["Real solar convection is driven by buoyancy, shaped by rotation, and \[Dash] in the rapidly rotating limit \[Dash] constrained by the Taylor\[Dash]Proudman theorem. It is worth naming these three ingredients to set the scene, but note carefully, in advance, which of them the 2-D barotropic model actually contains. Only one of the three (rotation) is present.", "Text",ExpressionUUID->"68787d25-1a90-4449-9c20-47cab08dd816"],
 
-Cell["\<\
-Boussinesq convection. Density variations are neglected except where they \
-multiply gravity to produce buoyancy. Warm fluid is lighter and rises; cool \
-fluid sinks. This is the buoyancy force that drives the flow.\
-\>", "Text",ExpressionUUID->"cc12c62a-ac38-4818-b557-dbf3aab1aece"],
+Cell["Buoyancy \[Dash] NOT in this model. In real convection, density variations multiplied by gravity produce a buoyancy force: warm fluid is lighter and rises, cool fluid sinks. That force is what drives convection and selects its scales. The barotropic model has no temperature field, no energy equation, and no vertical velocity, so it contains no buoyancy whatsoever. In its place a stochastic forcing simply injects vorticity at chosen scales \[Dash] the flow is stirred, not driven, and the \[OpenCurlyDoubleQuote]convective\[CloseCurlyDoubleQuote] scale is imposed by hand rather than selected by an instability.", "Text",ExpressionUUID->"cc12c62a-ac38-4818-b557-dbf3aab1aece"],
 
-Cell["\<\
-Rotation. The Sun rotates, so the convecting fluid feels the Coriolis force. \
-On the large scales relevant here, rotation is the single most important \
-organising influence \[Dash] far stronger, dynamically, than viscosity.\
-\>", "Text",ExpressionUUID->"3ab5bde1-e5b7-447e-b7fb-6bb2793f47ef"],
+Cell["Rotation \[Dash] the one ingredient this model DOES keep. The Sun rotates, so the fluid feels the Coriolis force. In a 2-D model rotation enters through a single mechanism: the advection of planetary vorticity f = 2\[CapitalOmega] sin\[Phi], i.e. the \[Beta]-effect (Section 2.3). On the large scales relevant here, rotation is the single most important organising influence \[Dash] far stronger, dynamically, than viscosity.", "Text",ExpressionUUID->"3ab5bde1-e5b7-447e-b7fb-6bb2793f47ef"],
 
-Cell["\<\
-The Taylor\[Dash]Proudman constraint. In a rapidly rotating fluid the flow \
-tends to become invariant along the rotation axis, organising convection into \
-tall columns (\[OpenCurlyDoubleQuote]banana cells\[CloseCurlyDoubleQuote]) \
-aligned with the axis rather than isotropic blobs. We derive this in Section \
-3.\
-\>", "Text",ExpressionUUID->"ba0ed27c-c4b9-4795-bf81-44796ff32a1d"],
+Cell["The Taylor\[Dash]Proudman constraint \[Dash] NOT in this model. In a rapidly rotating fluid the flow tends to become invariant ALONG the rotation axis, organising convection into tall columns (\[OpenCurlyDoubleQuote]banana cells\[CloseCurlyDoubleQuote]) aligned with the axis rather than isotropic blobs. This is an intrinsically THREE-dimensional balance \[Dash] it constrains variation along the axis, a direction a 2-D surface model does not even possess. We derive it in Section 3 as motivating background, but a 2-D barotropic model cannot produce banana cells by this mechanism; any axis-aligned striping it shows is a property of individual spherical harmonics, not the signature of rotationally constrained convection.", "Text",ExpressionUUID->"ba0ed27c-c4b9-4795-bf81-44796ff32a1d"],
 
 Cell["1.3  A schematic of the solar interior", "Subsection",ExpressionUUID->"3fd535f3-326a-4d8c-8abf-be6d6302900e"],
 
@@ -256,10 +231,7 @@ from the largest scales so the turbulence reaches a statistically steady \
 state.\
 \>", "Item",ExpressionUUID->"a36314ce-9cf6-4f7c-b29e-3c8a342d15ee"],
 
-Cell["\<\
-F \[Dash] stochastic forcing that injects energy at convective scales, \
-standing in for thermal buoyancy.\
-\>", "Item",ExpressionUUID->"fe5a4fa1-2fd4-4161-a0cf-34f52d389a17"],
+Cell["F \[Dash] stochastic (white-in-time) forcing that injects vorticity in a chosen band of scales. It is an imposed stirring, a kinematic stand-in for the stirring convective plumes would provide; it is NOT buoyancy and does not arise from any instability. The forced scale is put in by hand through the forcing band, not selected by the dynamics.", "Item",ExpressionUUID->"fe5a4fa1-2fd4-4161-a0cf-34f52d389a17"],
 
 Cell["\<\
 2.2  Streamfunction and the vorticity\[Dash]streamfunction relation\
@@ -308,8 +280,29 @@ anisotropic. In the spectral code, f is exactly a single spherical-harmonic \
 mode: since \!\(\*SubsuperscriptBox[\(Y\), \(1\), \(0\)]\) \[Proportional] \
 sin\[Phi], the field 2\[CapitalOmega] sin\[Phi] is proportional to \
 \!\(\*SubsuperscriptBox[\(Y\), \(1\), \(0\)]\) alone \[Dash] which is exactly \
-how simulate.py stores it.\
+how simulate_v6.py stores it. But \[OpenCurlyDoubleQuote]proportional to \
+\!\(\*SubsuperscriptBox[\(Y\), \(1\), \(0\)]\)\[CloseCurlyDoubleQuote] hides a \
+constant whose value depends entirely on the harmonic normalisation \[Dash] \
+and getting that constant wrong is exactly the bug that v5 shipped.\
 \>", "Text",ExpressionUUID->"ef6b00c7-a9bd-49bb-96ad-f3014243d82f"],
+
+Cell["2.3.1  A normalisation cautionary tale (the v5 Coriolis bug)", "Subsubsection",ExpressionUUID->"a1c0ffee-1000-4a10-9001-c0de0de00001"],
+
+Cell["The solver (pyshtools) uses REAL, 4\[Pi]-normalised spherical harmonics. In that convention the l=1, m=0 harmonic is \!\(\*SubsuperscriptBox[\(Y\), \(1\), \(0\)]\) = \!\(\*SqrtBox[\(3\)]\) cos\[Theta] = \!\(\*SqrtBox[\(3\)]\) sin\[Phi]; its peak value at the pole is \!\(\*SqrtBox[\(3\)]\), NOT the \!\(\*SqrtBox[\(3/4\[Pi]\)]\) of the more familiar orthonormal (unit-normalised) convention. To represent f = 2\[CapitalOmega] sin\[Phi] you need the coefficient c with c\[ThinSpace]\!\(\*SqrtBox[\(3\)]\) sin\[Phi] = 2\[CapitalOmega] sin\[Phi], i.e. c = 2\[CapitalOmega]/\!\(\*SqrtBox[\(3\)]\).", "Text",ExpressionUUID->"a1c0ffee-1000-4a10-9001-c0de0de00002"],
+
+Cell["v5 instead used c = 2\[CapitalOmega]\!\(\*SqrtBox[\(4\[Pi]/3\)]\) \[Dash] the coefficient that is correct only for UNIT-normalised harmonics \[Dash] while feeding it to 4\[Pi]-normalised ones. Because the 4\[Pi]-normalised harmonics are larger by a factor \!\(\*SqrtBox[\(4\[Pi]\)]\) \[TildeTilde] 3.545, the planetary vorticity came out too large by exactly that factor. The intended \[CapitalOmega] = 40 behaved like an effective \[CapitalOmega] \[TildeTilde] 142, and f at the pole was \[TildeTilde] 283 instead of 80. v6 uses c = 2\[CapitalOmega]/\!\(\*SqrtBox[\(3\)]\), giving f(pole) = 2\[CapitalOmega] = 80 exactly. The lesson: a spectral coefficient is meaningless until you state the normalisation of the basis it multiplies.", "Text",ExpressionUUID->"a1c0ffee-1000-4a10-9001-c0de0de00003"],
+
+Cell["\<\
+With[{\[CapitalOmega] = 40},
+ Association[
+  \"Y10 peak (4\[Pi]-norm, at pole)\" -> Sqrt[3] // N,
+  \"v6 coefficient  2\[CapitalOmega]/Sqrt[3]\" -> 2 \[CapitalOmega]/Sqrt[3] // N,
+  \"=> f(pole) = coeff*peak\" -> (2 \[CapitalOmega]/Sqrt[3]) Sqrt[3] // N,
+  \"v5 coefficient  2\[CapitalOmega]Sqrt[4\[Pi]/3]\" -> 2 \[CapitalOmega] Sqrt[4 Pi/3] // N,
+  \"=> v5 effective f(pole)\" -> 2 \[CapitalOmega] Sqrt[4 Pi/3] Sqrt[3] // N,
+  \"overstatement factor  Sqrt[4\[Pi]]\" -> Sqrt[4 Pi] // N]]
+(* f(pole) should be 80; v5 delivered ~283, i.e. Sqrt[4\[Pi]]\[TildeTilde]3.545x too large. *)\
+\>", "Input",ExpressionUUID->"a1c0ffee-1000-4a10-9001-c0de0de00004"],
 
 Cell["\<\
 Visualise f on the sphere. It is antisymmetric about the equator: positive \
@@ -388,11 +381,7 @@ aligned with the rotation axis; zonal harmonics (m = 0) are pure latitude \
 bands.\
 \>", "Item",ExpressionUUID->"a46e0987-0d7d-4049-bf61-98ffff349cbe"],
 
-Cell["\<\
-The gallery below shows how (l, m) selects a convective scale and shape. \
-Notice how large m produces the elongated, axis-aligned stripes that resemble \
-rotationally constrained convection cells.\
-\>", "Text",ExpressionUUID->"14b7695c-08da-4649-a59f-cdba69ca9184"],
+Cell["The gallery below shows how (l, m) sets a spatial scale and shape. Large m produces elongated, axis-aligned stripes. These resemble the \[OpenCurlyDoubleQuote]banana cells\[CloseCurlyDoubleQuote] of rotating convection, but the resemblance is superficial \[Dash] it is a property of the harmonic itself, not evidence that the 2-D model organises the flow this way.", "Text",ExpressionUUID->"14b7695c-08da-4649-a59f-cdba69ca9184"],
 
 Cell["\<\
 (* each row uses valid orders m = 0, l/2, l for its degree l *)
@@ -411,13 +400,7 @@ Grid[Table[
  Frame -> All, FrameStyle -> LightGray]\
 \>", "Input",ExpressionUUID->"960afc79-26a4-40c4-9f1f-1883fa415e61"],
 
-Cell["\<\
-Zonal harmonics (m = 0, left column) are pure latitude bands. As m grows \
-toward l (right column) the pattern breaks into longitudinal stripes; the \
-sectoral harmonics m = l are the axis-aligned bands. Rotationally constrained \
-convection prefers exactly these high-m, sectoral patterns \[Dash] the \
-mathematical signature of banana cells.\
-\>", "Text",ExpressionUUID->"2311063f-04d1-4c35-ad49-704f71d1f3fa"],
+Cell["Zonal harmonics (m = 0, left column) are pure latitude bands. As m grows toward l (right column) the pattern breaks into longitudinal stripes; the sectoral harmonics m = l are the axis-aligned bands. Rotating 3-D convection does tend to favour axis-aligned structures, but that selection is a Taylor\[Dash]Proudman effect the 2-D model lacks. Here these are just basis functions, shown to build intuition for the (l, m) indexing.", "Text",ExpressionUUID->"2311063f-04d1-4c35-ad49-704f71d1f3fa"],
 
 Cell["2.5  The Jacobian: nonlinear advection, computed spectrally", \
 "Subsection",ExpressionUUID->"8f6032dc-0dd0-4073-aa80-ab5c911ca4bb"],
@@ -456,7 +439,7 @@ flow.\
 
 Cell["\<\
 A pseudo-spectral evaluation is the standard trick and exactly what \
-simulate.py does. Products are cheap in physical (grid) space; derivatives \
+simulate_v6.py does. Products are cheap in physical (grid) space; derivatives \
 are cheap in spectral space. So each step:\
 \>", "Text",ExpressionUUID->"8759192e-5925-4a11-88d8-477f0be2534b"],
 
@@ -562,14 +545,7 @@ Cell[BoxData[
   TraditionalForm]], "DisplayFormula",
  TextAlignment->Center,ExpressionUUID->"98d44892-72e4-4bc5-8a04-fe28604a4856"],
 
-Cell["\<\
-The single most diagnostic number for the flow structure. Ro \[LessLess] 1 \
-means the Coriolis force dominates fluid inertia and the flow is strongly \
-rotationally constrained. The solar convection zone has Ro \[TildeTilde] 0.1\
-\[Dash]1 depending on scale: the large scales are rotationally constrained, \
-the small granular scales are not. Our high value of \[CapitalOmega] pushes \
-the model firmly into the low-Ro, banana-cell regime.\
-\>", "Text",ExpressionUUID->"9a86f54c-b8ac-49be-860a-b3f0712a8ae2"],
+Cell["The single most diagnostic number for the flow structure. Ro \[LessLess] 1 means the Coriolis force dominates fluid inertia and the flow is strongly rotationally constrained. The solar convection zone has Ro \[TildeTilde] 0.1\[Dash]1 depending on scale: the large scales are rotationally constrained, the small granular scales are not. The model is run at high \[CapitalOmega] (= 40 here), which does place the resolved flow at low Rossby number (Ro \[TildeTilde] 0.06 at the forcing scale). But low Ro alone does not hand a 2-D model the axis-aligned columns of 3-D rotating convection \[Dash] that requires the Taylor\[Dash]Proudman constraint (Section 3.2), which is absent here. In practice the run stays close to isotropic, with only ~3.7% of its energy in zonal (m = 0) modes (Section 6).", "Text",ExpressionUUID->"9a86f54c-b8ac-49be-860a-b3f0712a8ae2"],
 
 Cell["3.2  The Taylor\[Dash]Proudman theorem", "Subsection",ExpressionUUID->"3ba69768-c6e3-4863-9714-1ec8c6f6dc8e"],
 
@@ -617,21 +593,9 @@ axis. This is the Taylor\[Dash]Proudman theorem. A rotating fluid is \
 it moves in rigid columns known as Taylor columns.\
 \>", "Text",ExpressionUUID->"861ca327-a464-48a3-9bcd-4637a16e34bf"],
 
-Cell["\<\
-In a sphere, convection that must remain columnar wraps these columns around \
-the inner core, producing the north\[Dash]south elongated \
-\[OpenCurlyDoubleQuote]banana cells\[CloseCurlyDoubleQuote] first described \
-by Busse (1970). This is precisely why the barotropic model \[Dash] \
-two-dimensional by construction \[Dash] is a defensible caricature of \
-rotationally constrained solar convection: rapid rotation makes the real \
-three-dimensional flow behave nearly two-dimensionally anyway.\
-\>", "Text",ExpressionUUID->"c606523c-38df-4891-a94e-46abe4cae085"],
+Cell["In a sphere, convection constrained to remain columnar wraps these columns around the inner core, producing the north\[Dash]south elongated \[OpenCurlyDoubleQuote]banana cells\[CloseCurlyDoubleQuote] first described by Busse (1970). It is tempting to argue that this justifies a 2-D model: if rapid rotation makes the 3-D flow nearly two-dimensional, why not model it in 2-D directly? The argument fails on a crucial point. Taylor\[Dash]Proudman makes the flow invariant ALONG the rotation axis \[Dash] a direction that lies in the equatorial PLANE, not on the spherical surface this barotropic model uses. The model here evolves vorticity on a sphere; it has no axis to be stiff along and cannot represent Taylor columns at all. The derivation below is background for why rotating convection is columnar in reality \[Dash] not a mechanism present in this model.", "Text",ExpressionUUID->"c606523c-38df-4891-a94e-46abe4cae085"],
 
-Cell["\<\
-The cell below makes the constraint visible: convection columns aligned with \
-the rotation axis, wrapping the tangent cylinder that circumscribes the inner \
-core.\
-\>", "Text",ExpressionUUID->"cb49e9bb-657e-41c4-9ff0-9ae4cbf915fb"],
+Cell["The cell below makes the constraint visible: convection columns aligned with the rotation axis, wrapping the tangent cylinder that circumscribes the inner core. This illustrates the real 3-D geometry \[Dash] which the 2-D surface model does not contain.", "Text",ExpressionUUID->"cb49e9bb-657e-41c4-9ff0-9ae4cbf915fb"],
 
 Cell["\<\
 Module[{axis, tanCyl, columns, sph, nCol = 14, rIn = 0.35},
@@ -658,15 +622,7 @@ Cell["\<\
 3.3  Why rotation forces columns \[Dash] a one-line scaling argument\
 \>", "Subsection",ExpressionUUID->"b5717bc9-d359-4608-91ac-973c6914512a"],
 
-Cell["\<\
-The Taylor\[Dash]Proudman result can be read as a scaling statement. Vertical \
-variations of the flow are suppressed by a factor of the Rossby number: a \
-structure of horizontal scale L develops vertical variation only over a \
-height \[TildeTilde] L / Ro. When Ro \[LessLess] 1 that height exceeds the \
-domain, so the structure spans it as a column. Rapidly rotating convection is \
-therefore generically columnar \[Dash] and the columns are tall and thin, \
-exactly the banana-cell morphology the simulation reproduces.\
-\>", "Text",ExpressionUUID->"9133c0fe-0a16-4f16-bf8a-7c2819fbd905"],
+Cell["The Taylor\[Dash]Proudman result can be read as a scaling statement. Vertical variations of the flow are suppressed by a factor of the Rossby number: a structure of horizontal scale L develops vertical variation only over a height \[TildeTilde] L / Ro. When Ro \[LessLess] 1 that height exceeds the domain, so the structure spans it as a column. Rapidly rotating convection is therefore generically columnar in three dimensions. This explains why 3-D convection looks the way it does \[Dash] but it is a statement about vertical (axis-parallel) structure, which the 2-D barotropic model does not represent. The simulation does NOT reproduce banana cells.", "Text",ExpressionUUID->"9133c0fe-0a16-4f16-bf8a-7c2819fbd905"],
 
 Cell["4.  The Numerical Method", "Section",ExpressionUUID->"a716fa7a-5637-462b-ae54-bee622c56961"],
 
@@ -719,7 +675,7 @@ Cell[BoxData[
  TextAlignment->Center,ExpressionUUID->"8f231137-649f-43b9-a295-eec4b793df46"],
 
 Cell["\<\
-This is the array _inv_ev in simulate.py. The l = 0 mode is set to zero (a \
+This is the array _inv_ev in simulate_v6.py. The l = 0 mode is set to zero (a \
 constant streamfunction carries no flow). Let us verify the eigenvalue \
 property symbolically \[Dash] apply the angular (Laplace\[Dash]Beltrami) \
 operator to \!\(\*SubsuperscriptBox[\(Y\), \(l\), \(m\)]\) and divide it back \
@@ -783,11 +739,11 @@ hyperviscosity is essentially inert across the whole inertial range and then \
 switches on abruptly near the truncation wavenumber, cleanly absorbing the \
 enstrophy that cascades to the grid scale while leaving the physically \
 meaningful large and intermediate scales almost untouched. The plot compares \
-the two, both normalised to bite at the same rate at l = 85:\
+the two, both normalised to bite at the same rate at l = 127:\
 \>", "Text",ExpressionUUID->"9743493a-2346-4378-b16b-34ac23d9dcee"],
 
 Cell["\<\
-With[{lmax = 85, mu = 0.25, nu = 3.*^-15, dt = 0.002},
+With[{lmax = 127, mu = 0.03, nu = 6.*^-17, dt = 0.0015},
  Module[{lam, hyper, ord, nuOrd},
   lam[l_] := l (l + 1);
   (* match ordinary viscosity to hyperviscosity at the truncation *)
@@ -801,19 +757,13 @@ With[{lmax = 85, mu = 0.25, nu = 3.*^-15, dt = 0.002},
 \(2\)]\)  (rate \[Proportional] l(l+1))\",
       \"hyperviscosity \[Nu]\!\(\*SuperscriptBox[\(\[Del]\), \(8\)]\)  (rate \
 \[Proportional] [l(l+1)\!\(\*SuperscriptBox[\(]\), \(4\)]\))\"}, Below],
-   Frame -> True, GridLines -> {{18, 45}, None},
+   Frame -> True, GridLines -> {{60, 80}, None},
    FrameLabel -> {\"spherical-harmonic degree l\", \"dissipation rate\"},
    ImageSize -> 440,
    PlotLabel -> Style[\"Scale-selective dissipation\", 13, Bold]]]]\
 \>", "Input",ExpressionUUID->"ebe7a55c-dd5f-4f4e-8a31-c25f88d2f0fb"],
 
-Cell["\<\
-The two vertical gridlines mark the forcing band (l = 18\[Dash]45). Ordinary \
-viscosity (dashed) already damps those forced scales appreciably; \
-hyperviscosity (red) is orders of magnitude weaker there and only rises to \
-meet it at the very smallest scales \[Dash] preserving a broad inertial range \
-of thin vorticity filaments.\
-\>", "Text",ExpressionUUID->"f9a16040-2a82-472e-862f-f371e59f1bb4"],
+Cell["The two vertical gridlines mark the forcing band (l = 60\[Dash]80). Ordinary viscosity (dashed) already damps those forced scales appreciably; hyperviscosity (red) is orders of magnitude weaker there and only rises to meet it at the very smallest scales \[Dash] preserving a broad inertial range of thin vorticity filaments. (Note the flip side, quantified in the audit section: with the forcing this close to the truncation, ~42% of the injected energy is removed by hyperviscosity at small scales instead of cascading upscale.)", "Text",ExpressionUUID->"f9a16040-2a82-472e-862f-f371e59f1bb4"],
 
 Cell["4.3  The implicit dissipation factor and RK2 time stepping", \
 "Subsection",ExpressionUUID->"0827b064-e8f6-4110-a96f-ce0a48cc0bae"],
@@ -879,38 +829,22 @@ Cell[BoxData[
    }], TraditionalForm]], "DisplayFormula",
  TextAlignment->Center,ExpressionUUID->"69afdc84-51b3-4fd5-bc86-054095a8ada1"],
 
-Cell["\<\
-where \[ScriptCapitalN] = -J(\[Psi], \[Omega]+f) is the advective tendency, F \
-is the stochastic forcing added at each step, and \[ScriptCapitalD] is the \
-implicit dissipation factor above. This is exactly the sequence in the step() \
-method: two tendency evaluations, add forcing, multiply by the viscosity \
-factor, and zero out the mean.\
-\>", "Text",ExpressionUUID->"c245c43d-d1ea-4134-b523-e82efbf0c08e"],
+Cell["where \[ScriptCapitalN] = -J(\[Psi], \[Omega]+f) is the advective tendency, F is the stochastic forcing added at each step, and \[ScriptCapitalD] is the implicit dissipation factor above. This is exactly the sequence in the step() method: two tendency evaluations, add forcing, multiply by the viscosity factor, and zero out the mean.", "Text",ExpressionUUID->"c245c43d-d1ea-4134-b523-e82efbf0c08e"],
+
+Cell["A word on global accuracy, to be honest about it. The advective substep is a 2nd-order Heun step and the dissipation factor is EXACT, but the two are combined by simple operator splitting (Lie\[Dash]Trotter: advance advection, then apply the linear factor). Lie\[Dash]Trotter splitting is only first-order accurate, so the scheme as a whole is globally O(\[CapitalDelta]t), NOT 2nd order. A step-halving test confirms it \[Dash] the deterministic error ratio is 2.00, the signature of first-order convergence. For statistically steady, strongly dissipative turbulence driven by white-in-time forcing this is adequate (the strong order under such forcing is \[LessEqual] 1 regardless), but the scheme should not be advertised as 2nd-order. A Strang split, \[ScriptCapitalD](\[CapitalDelta]t/2)\[VeryThinSpace]\[ScriptCapitalN](\[CapitalDelta]t)\[VeryThinSpace]\[ScriptCapitalD](\[CapitalDelta]t/2), would recover 2nd order in the deterministic limit.", "Text",ExpressionUUID->"c245c43d-d1ea-4134-b523-e82efbf0c08f"],
 
 Cell["4.4  Stochastic forcing as a proxy for buoyancy", "Subsection",ExpressionUUID->"dd12c2b1-d6bb-4c52-a3fe-6985c973f72e"],
 
-Cell["\<\
-The barotropic model has no temperature field, so there is nothing to \
-generate buoyancy directly. Instead, thermal driving is represented by \
-injecting random vorticity each step in a band of intermediate scales \
-(degrees l = 18\[Dash]45 here), which stands in for the range of scales at \
-which convective plumes stir the flow. The amplitude in each mode is scaled \
-by 1/\!\(\*SqrtBox[\(l \((l + 1)\)\)]\) and by \
-\!\(\*SqrtBox[\(\[CapitalDelta]t\)]\) so that the injection behaves as a \
-proper white-in-time random forcing. From this band, nonlinear interactions \
-spread enstrophy to smaller scales (the forward cascade absorbed by \
-hyperviscosity) and energy to larger scales (removed by the linear drag), \
-producing a statistically steady turbulent state.\
-\>", "Text",ExpressionUUID->"5a6035ee-767b-4023-bfb1-4e1dd812359c"],
+Cell["The barotropic model has no temperature field, so there is nothing to generate buoyancy. Instead the stirring is imposed directly, by injecting random vorticity each step in a band of small scales (degrees l = 60\[Dash]80 in v6), chosen to sit ABOVE the Rhines degree (measured l_R \[TildeTilde] 23) so that a forward enstrophy cascade runs to smaller scales (filaments, absorbed by hyperviscosity) and SOME inverse energy transfer runs to larger scales (partly removed by the weak linear drag). The amplitude in each mode is scaled by 1/\!\(\*SqrtBox[\(l \((l + 1)\)\)]\) and by \!\(\*SqrtBox[\(\[CapitalDelta]t\)]\) so the injection behaves as a proper white-in-time forcing. After a spin-up of ~5 drag times the run reaches a statistically steady state. Note the scale separation is only marginal (l_R \[TildeTilde] 23 vs forcing 60\[Dash]80, ratio ~2.6), so the inverse cascade is weak and does NOT organise into jets \[Dash] see Section 6 and the audit.", "Text",ExpressionUUID->"5a6035ee-767b-4023-bfb1-4e1dd812359c"],
 
 Cell["\<\
 (* the forcing spectrum: amplitude injected per mode vs degree l *)
-Module[{lmin = 18, lmax = 45, amp = 1.3},
+Module[{lmin = 60, lmax = 80, amp = 2.2},
  BarChart[
-  Table[If[lmin <= l <= lmax, amp/Sqrt[l (l + 1)], 0], {l, 1, 60}],
+  Table[If[lmin <= l <= lmax, amp/Sqrt[l (l + 1)], 0], {l, 1, 127}],
   ChartLabels -> None, ChartStyle -> RGBColor[0.85, 0.3, 0.2],
   Frame -> True, FrameLabel -> {\"degree l\", \"forcing amplitude\"},
-  PlotLabel -> Style[\"Stochastic forcing band (l = 18\[Dash]45)\", 13, \
+  PlotLabel -> Style[\"Stochastic forcing band (l = 60\[Dash]80)\", 13, \
 Bold],
   ImageSize -> 420]]\
 \>", "Input",ExpressionUUID->"2724655c-8065-4735-a880-9c2994c6857a"],
@@ -954,70 +888,47 @@ Module[{outer, core, field},
 
 Cell["5.2  The radial reconstruction on the cut faces", "Subsection",ExpressionUUID->"a2138e7a-b5ad-40d4-a77a-b917f2bb333e"],
 
-Cell["\<\
-The barotropic model lives on a single spherical surface \[Dash] it has no \
-genuine radial structure. To make the interior faces look plausible, the \
-renderer maps the surface field inward with a radial weight: the value at an \
-interior point (r, \[Theta], \[Phi]) is the surface value at the same (\
-\[Theta], \[Phi]), multiplied by a smooth inward decay plus a couple of \
-radial modes that vanish at both boundaries. With \[Xi] = (r - \
-\!\(\*SubscriptBox[\(R\), \(in\)]\))/(\!\(\*SubscriptBox[\(R\), \(out\)]\) - \
-\!\(\*SubscriptBox[\(R\), \(in\)]\)) \[Element] [0, 1]:\
-\>", "Text",ExpressionUUID->"0951d413-5635-4f9e-a72e-cb9590ff477e"],
+Cell["The barotropic model lives on a single spherical surface \[Dash] it has no genuine radial structure. To draw a cutaway we must nonetheless say something about \[Omega] INSIDE the shell. v6 replaces v5's decorative decay with the correct RADIAL EIGENFUNCTION: each spherical-harmonic mode is continued inward by the regular solid harmonic \!\(\*SuperscriptBox[\((r/\*SubscriptBox[\(R\), \(out\)])\), \(l\)]\) \[Dash] the solution of Laplace's equation \[Del]^2(\!\(\*SuperscriptBox[\(r\), \(l\)]\)\!\(\*SubsuperscriptBox[\(Y\), \(l\), \(m\)]\)) = 0 that stays finite toward the origin, hence the natural radial structure of a harmonic scalar field. Written per mode:", "Text",ExpressionUUID->"0951d413-5635-4f9e-a72e-cb9590ff477e"],
 
 Cell[BoxData[
  FormBox[
-  RowBox[{"w", 
-   RowBox[{"(", 
-    RowBox[{"r", ",", "\[Phi]"}], ")"}], "=", 
-   SuperscriptBox[
-    RowBox[{"(", 
-     RowBox[{"r", "/", 
-      SubscriptBox["R", "out"]}], ")"}], "2"], " ", 
-   RowBox[{"(", 
-    RowBox[{"1", "+", "0.32", " ", "sin", 
-     RowBox[{"(", 
-      RowBox[{"2", "\[Pi]", "\[Xi]"}], ")"}], "cos", "\[Phi]", "+", "0.18", " ",
-      "sin", 
-     RowBox[{"(", 
-      RowBox[{"3", "\[Pi]", "\[Xi]"}], ")"}], "cos", " ", "2", "\[Phi]"}], 
-    ")"}]}], TraditionalForm]], "DisplayFormula",
+  RowBox[{
+   RowBox[{"\[Omega]", "(",
+    RowBox[{"r", ",", "\[Theta]", ",", "\[Phi]"}], ")"}], "=",
+   RowBox[{
+    UnderscriptBox["\[Sum]",
+     RowBox[{"l", ",", "m"}]],
+    SubsuperscriptBox["\[Omega]", "l", "m"], " ",
+    SuperscriptBox[
+     RowBox[{"(",
+      RowBox[{"r", "/",
+       SubscriptBox["R", "out"]}], ")"}], "l"], " ",
+    RowBox[{
+     SubsuperscriptBox["Y", "l", "m"], "(",
+     RowBox[{"\[Theta]", ",", "\[Phi]"}], ")"}]}]}],
+  TraditionalForm]], "DisplayFormula",
  TextAlignment->Center,ExpressionUUID->"033e3327-c331-48fd-b0a1-67a8ed41b397"],
 
-Cell["\<\
-Because sin(k\[Pi]\[Xi]) vanishes at \[Xi] = 0 and \[Xi] = 1, the extra \
-radial cells die at both the inner core and the outer rim, so the cut face \
-joins the coloured surface seamlessly while carrying visible radial structure \
-in between. The plot shows the radial weight across the shell at three \
-latitudes:\
-\>", "Text",ExpressionUUID->"c162bd4d-c13e-44d7-9e32-45ee77e795a9"],
+Cell["The factor \!\(\*SuperscriptBox[\((r/\*SubscriptBox[\(R\), \(out\)])\), \(l\)]\) does two honest things at once. At r = \!\(\*SubscriptBox[\(R\), \(out\)]\) it equals 1, so the cut faces join the coloured surface seamlessly \[Dash] no longitude shear needed. And because it decays faster the larger l is, low-l (large-scale) structures reach deep into the shell while high-l filaments stay surface-confined \[Dash] the depth ordering is DERIVED from the harmonic degree, not painted on. The plot shows the weight for a few degrees; note how completely the forcing scale (l \[TildeTilde] 70) dies before reaching the base at r/R = 0.71.", "Text",ExpressionUUID->"c162bd4d-c13e-44d7-9e32-45ee77e795a9"],
 
 Cell["\<\
-Module[{rIn = 0.35, rOut = 1.0, xi, w},
- xi[r_] := (r - rIn)/(rOut - rIn);
- w[r_, latDeg_] := With[{\[Phi] = latDeg Degree},
-   (r/rOut)^2 (1 + 0.32 Sin[2 Pi xi[r]] Cos[\[Phi]]
-      + 0.18 Sin[3 Pi xi[r]] Cos[2 \[Phi]])];
- Plot[{w[r, 0], w[r, 45], w[r, 80]}, {r, rIn, rOut},
-  PlotStyle -> {Red, Purple, Blue}, PlotRange -> All,
-  Frame -> True, FrameLabel -> {\"radius r / R\", \"radial weight w\"},
-  PlotLegends -> {\"lat 0\[Degree]\", \"lat 45\[Degree]\", \"lat \
-80\[Degree]\"},
-  GridLines -> {{rIn, rOut}, {0, 1}}, ImageSize -> 420,
-  PlotLabel -> Style[\"Radial reconstruction weight\", 13, Bold]]]\
+Module[{rIn = 0.71, rOut = 1.0, ls = {2, 6, 20, 70}},
+ Plot[Evaluate[Table[(r/rOut)^l, {l, ls}]], {r, rIn, rOut},
+  PlotRange -> {0, 1}, PlotStyle -> {Red, Purple, Darker[Green], Blue},
+  Frame -> True, FrameLabel -> {\"radius r / R\", \"radial weight (r/R)^l\"},
+  PlotLegends -> ((\"l = \" <> ToString[#]) & /@ ls),
+  GridLines -> {{rIn, rOut}, {0, 1}}, ImageSize -> 440,
+  PlotLabel -> Style[\"Regular solid-harmonic radial weight (r/R)^l\", 13, \
+Bold]]]\
 \>", "Input",ExpressionUUID->"bd17a0de-b326-462c-a3ab-2fcb49e5e0d8"],
 
-Cell["\<\
-An equatorial cross-section makes the effect concrete. Sampling a \
-longitudinal wave (a stand-in for the surface vorticity) and multiplying by \
-the radial weight gives concentric, shell-following structures on the \
-quarter-annulus \[Dash] not vertical columns:\
-\>", "Text",ExpressionUUID->"1071812a-01ec-4478-8d54-078dccf42efe"],
+Cell["HONESTY, as flagged in the v6 audit (\[Section]4.4): the exact \!\(\*SuperscriptBox[\((r/R)\), \(l\)]\) above puts a forcing-scale mode (l \[TildeTilde] 70) at \!\(\*SuperscriptBox[\(0.71\), \(70\)]\) \[TildeTilde] 4\[Times]\!\(\*SuperscriptBox[\(10\), \(-11\)]\) of its surface amplitude at the base \[Dash] i.e. the deep interior is essentially empty of small-scale structure. To fill the cutaway for display, the actual renderer (visualize_v6.py) softens the decay to \!\(\*SuperscriptBox[\((r/R)\), \(l/\*SubscriptBox[\(L\), \(ref\)])\)]\) with \!\(\*SubscriptBox[\(L\), \(ref\)]\) \[TildeTilde] 10, which OVERSTATES the penetration of forcing-scale modes by ~10\[Times] (painting l \[TildeTilde] 70 at ~9% at the base). That is an illustrative choice to avoid an almost-blank interior, honestly labelled as such \[Dash] a 2-D barotropic model carries no radial structure at all.", "Text",ExpressionUUID->"c162bd4d-cc00-49bc-9c00-000000000001"],
+
+Cell["An equatorial cross-section makes the effect concrete. Taking a single longitudinal wave cos(6\[Lambda]) (a stand-in for one l = 6 surface mode) and multiplying by its regular-solid-harmonic weight \!\(\*SuperscriptBox[\((r/R)\), \(6\)]\) gives structure that is strong near the rim and decays smoothly inward \[Dash] shell-following, not vertical columns. A 2-D surface field simply has no mechanism to make Taylor columns:", "Text",ExpressionUUID->"1071812a-01ec-4478-8d54-078dccf42efe"],
 
 Cell["\<\
-Module[{rIn = 0.35, rOut = 1.0, xi, w, field},
- xi[r_] := (r - rIn)/(rOut - rIn);
- w[r_] := (r/rOut)^2 (1 + 0.32 Sin[2 Pi xi[r]]);
+Module[{rIn = 0.71, rOut = 1.0, w, field},
+ w[r_] := (r/rOut)^6;
  field[r_, \[Lambda]_] := w[r] Cos[6 \[Lambda]];
  DensityPlot[field[Sqrt[x^2 + y^2], ArcTan[x, y]],
   {x, 0, rOut}, {y, 0, rOut},
@@ -1025,17 +936,12 @@ Module[{rIn = 0.35, rOut = 1.0, xi, w, field},
   ColorFunction -> (ColorData[\"TemperatureMap\"][Rescale[#, {-1, 1}]] &),
   ColorFunctionScaling -> False, PlotPoints -> 90, Mesh -> None,
   Frame -> True, AspectRatio -> 1, ImageSize -> 360,
-  PlotLabel -> Style[\"Equatorial cut: reconstructed field\", 13, Bold]]]\
+  PlotLabel -> Style[\"Equatorial cut: (r/R)^l reconstruction\", 13, Bold]]]\
 \>", "Input",ExpressionUUID->"7dbae047-2016-448f-8bef-bb083d0ab649"],
 
 Cell["5.3  A banana-cell pattern on the sphere", "Subsection",ExpressionUUID->"59a4139b-c4f9-4216-8325-cbe745d5353d"],
 
-Cell["\<\
-Finally, a high-order sectoral harmonic gives the axis-aligned, \
-north\[Dash]south-elongated cells that rotationally constrained convection \
-produces \[Dash] the visual signature the full simulation is built to \
-reproduce.\
-\>", "Text",ExpressionUUID->"43826b47-226f-439d-ac52-e69796892ffe"],
+Cell["Finally, a high-order sectoral harmonic (l = m) gives an axis-aligned, north\[Dash]south-elongated pattern. Such patterns are the usual illustration of \[OpenCurlyDoubleQuote]banana cells\[CloseCurlyDoubleQuote] \[Dash] but, as stressed throughout, the 2-D barotropic simulation does not select or reproduce them. This cell simply displays one sectoral harmonic in isolation, as a picture of what the phrase refers to.", "Text",ExpressionUUID->"43826b47-226f-439d-ac52-e69796892ffe"],
 
 Cell["\<\
 SphericalPlot3D[1 + 0.06 Re[SphericalHarmonicY[12, 12, \[Theta], \[Phi]]],
@@ -1045,7 +951,7 @@ SphericalPlot3D[1 + 0.06 Re[SphericalHarmonicY[12, 12, \[Theta], \[Phi]]],
 \[Theta], \[Phi]]], {-0.3, 0.3}]]],
  ColorFunctionScaling -> False, Mesh -> None, PlotPoints -> 70,
  Boxed -> False, Axes -> False, ImageSize -> 380,
- PlotLabel -> Style[\"Sectoral harmonic (l = m = 12): banana cells\", 13, \
+ PlotLabel -> Style[\"Sectoral harmonic (l = m = 12): an axis-aligned pattern\", 13, \
 Bold]]\
 \>", "Input",ExpressionUUID->"9e2582ca-708a-4354-90ea-94e400decdd0"],
 
@@ -1053,33 +959,15 @@ Cell["6.  Results and Discussion", "Section",ExpressionUUID->"98bdd22b-bdf6-44ba
 
 Cell["6.1  What the simulation shows", "Subsection",ExpressionUUID->"8beeb598-a1a9-4e82-806f-e4ff0576fa3c"],
 
-Cell["\<\
-Run at high rotation (\[CapitalOmega] = 15, spectral truncation T85), the \
-model settles into a statistically steady, rotation-dominated turbulent \
-state. The characteristic features:\
-\>", "Text",ExpressionUUID->"88296a7a-83bf-4939-ab8a-e44cdd0ee999"],
+Cell["Run at high rotation (\[CapitalOmega] = 40, spectral truncation T127) and spun up for ~5 drag times, the model settles into a statistically steady, rotation-dominated turbulent state. The characteristic features \[Dash] and, honestly, the features it was hoped for but does NOT show:", "Text",ExpressionUUID->"88296a7a-83bf-4939-ab8a-e44cdd0ee999"],
 
-Cell["\<\
-North\[Dash]south elongated banana cells \[Dash] the visible expression of \
-the Taylor\[Dash]Proudman constraint.\
-\>", "Item",ExpressionUUID->"48f5e47d-b7a1-4951-b713-2eb4c8b5e87b"],
+Cell["A broad, filamentary vorticity field. The spectrum genuinely broadened relative to v5 \[Dash] roughly 53% of the enstrophy below / 31% in / 16% above the forcing band, versus v5's 97% trapped in-band \[Dash] so a forward enstrophy cascade and some inverse transfer both exist. This is the real, measurable v6 improvement.", "Item",ExpressionUUID->"48f5e47d-b7a1-4951-b713-2eb4c8b5e87b"],
 
-Cell["\<\
-A broad inertial range of thin vorticity filaments, sustained by the weak, \
-scale-selective hyperviscosity that only bites near the truncation.\
-\>", "Item",ExpressionUUID->"de0f1207-f1cc-4038-aaa3-6c15f447c339"],
+Cell["A broad inertial range of thin vorticity filaments, sustained by the weak, scale-selective hyperviscosity that only bites near the truncation.", "Item",ExpressionUUID->"de0f1207-f1cc-4038-aaa3-6c15f447c339"],
 
-Cell["\<\
-A statistically steady balance: stochastic forcing injects at l = \
-18\[Dash]45, the forward enstrophy cascade drains to small scales, and linear \
-drag removes the large-scale energy that the inverse cascade would otherwise \
-pile up.\
-\>", "Item",ExpressionUUID->"133c49cf-5449-41fc-abe2-919832b9262b"],
+Cell["A statistically steady balance: stochastic forcing injects at l = 60\[Dash]80, the forward enstrophy cascade drains to small scales, and linear drag removes large-scale energy. (A caveat quantified in the audit: ~42% of the injected energy is lost to hyperviscosity at small scales rather than cascading upscale, because the forcing sits close to the dissipation range.)", "Item",ExpressionUUID->"133c49cf-5449-41fc-abe2-919832b9262b"],
 
-Cell["\<\
-Strong equator\[Dash]pole anisotropy imposed by f = 2\[CapitalOmega] \
-sin\[Phi]: zonally banded structure and Rossby-wave activity.\
-\>", "Item",ExpressionUUID->"ccb0dced-f059-4b6f-9e62-3793a3d94b35"],
+Cell["NO zonal jets. The \[Beta]-effect imposes some equator\[Dash]pole anisotropy and Rossby-wave activity, but zonal (m = 0) energy is only ~3.7% \[Dash] essentially isotropic turbulence with a whisper of anisotropy, NOT a jet regime (which would be 50\[Dash]90% zonal). The scale separation that would drive jets is marginal (Rhines degree l_R \[TildeTilde] 23 vs forcing 60\[Dash]80), so the advertised \[OpenCurlyDoubleQuote]jets from an arrested inverse cascade\[CloseCurlyDoubleQuote] are NOT achieved at these parameters. The legitimate niche of this class of model is Jupiter-like 2-D geostrophic turbulence, which this particular run does not reach.", "Item",ExpressionUUID->"ccb0dced-f059-4b6f-9e62-3793a3d94b35"],
 
 Cell["6.2  How it compares to full 3-D convection codes", "Subsection",ExpressionUUID->"c1e9cffd-752a-475d-903d-3e5dd1e044d1"],
 
@@ -1105,8 +993,8 @@ resolved shell)\"},
 (magnetic field)\"},
   {\"Rotation / Coriolis\", \"yes (f = 2\[CapitalOmega] sin\[Phi])\", \"yes \
 (full Coriolis)\"},
-  {\"Buoyancy driving\", \"stochastic proxy forcing\", \"genuine thermal \
-buoyancy\"},
+  {\"Buoyancy driving\", \"none (imposed stochastic stirring)\", \"genuine \
+thermal buoyancy\"},
   {\"Radial structure\", \"none (reconstructed for display)\", \"resolved\"},
   {\"Differential rotation\", \"not captured\", \"emergent\"},
   {\"Magnetism / dynamo\", \"none\", \"optional (MHD)\"},
@@ -1121,20 +1009,11 @@ Cell["6.3  What the model gets right \[Dash] and what it misses", "Subsection",E
 
 Cell["Gets right:", "Text",ExpressionUUID->"a402a0ba-56cf-4493-bcc4-aa84b6a23dc8"],
 
-Cell["\<\
-Rotation-dominated dynamics. At low Rossby number the real flow is nearly \
-two-dimensional, so a 2-D model is not as crude as it first appears.\
-\>", "Item",ExpressionUUID->"b1e2da47-ebf0-438f-9983-bd83116c4c17"],
+Cell["Rotation-dominated 2-D dynamics. The Coriolis \[Beta]-effect is represented exactly, and the resolved flow sits at low Rossby number.", "Item",ExpressionUUID->"b1e2da47-ebf0-438f-9983-bd83116c4c17"],
 
-Cell["\<\
-Banana cells and axis-aligned columns \[Dash] the correct large-scale \
-morphology of rotationally constrained convection.\
-\>", "Item",ExpressionUUID->"8816f450-036a-4ebc-bf4b-25898b4023e2"],
+Cell["The kinematics of non-divergent flow on a rotating sphere: exact vorticity\[Dash]streamfunction inversion, planetary-vorticity advection, and Rossby-wave propagation.", "Item",ExpressionUUID->"8816f450-036a-4ebc-bf4b-25898b4023e2"],
 
-Cell["\<\
-The character of forced\[Dash]dissipative geostrophic turbulence: dual \
-cascade, filamentation, statistically steady state.\
-\>", "Item",ExpressionUUID->"86324233-49f1-4d09-9b6e-87daa109c51a"],
+Cell["The character of forced\[Dash]dissipative 2-D turbulence: a dual cascade (forward enstrophy to filaments, some inverse energy transfer), filamentation, and a statistically steady state.", "Item",ExpressionUUID->"86324233-49f1-4d09-9b6e-87daa109c51a"],
 
 Cell["Misses:", "Text",ExpressionUUID->"245a65a5-5deb-4c06-9d17-1e02506fa7f5"],
 
@@ -1161,12 +1040,43 @@ Magnetism. No dynamo, hence no sunspot cycle \[Dash] the phenomenon that \
 motivates much of solar-convection research.\
 \>", "Item",ExpressionUUID->"275340bf-1e88-49d7-93f0-ff0037f9daef"],
 
-Cell["\<\
-The barotropic model is best understood as a fast, transparent laboratory for \
-the geometry and statistics of rotationally constrained turbulence on a \
-sphere \[Dash] a stepping stone to, not a replacement for, the full 3-D \
-simulations.\
-\>", "Text",ExpressionUUID->"9c59226c-4a2c-448d-89c7-bc0102af2f65"],
+Cell["The barotropic model is best understood as a fast, transparent laboratory for the geometry and statistics of forced 2-D turbulence on a rotating sphere \[Dash] not a model of solar convection, and (at these parameters) not even a jet-forming geostrophic-turbulence run. It is a stepping stone to, not a replacement for, the full 3-D simulations described next.", "Text",ExpressionUUID->"9c59226c-4a2c-448d-89c7-bc0102af2f65"],
+
+Cell["7.  What This Model Cannot Capture", "Section",ExpressionUUID->"c0ffee00-0007-4000-8000-000000000001"],
+
+Cell["The limitations below are STRUCTURAL \[Dash] they follow from the model being a single scalar equation on a 2-D surface, and no amount of parameter tuning can remove them. This is the honest boundary of what a barotropic vorticity model can say about solar convection.", "Text",ExpressionUUID->"c0ffee00-0007-4000-8000-000000000002"],
+
+Cell["No radial dimension. The model lives on one spherical surface, so it has no depth structure, no penetration or overshoot, no tachocline, and no vertical velocity \[Dash] which is precisely the up/down-flow signal that convection imagery shows. The interior in the cutaway is a kinematic reconstruction (Section 5), not a solved flow.", "Item",ExpressionUUID->"c0ffee00-0007-4000-8000-000000000003"],
+
+Cell["No buoyancy or energy equation. There is no temperature, no Rayleigh number, no convective instability, and no heat transport. The flow is stirred by imposed forcing, not driven by buoyancy; the convective scale is prescribed, not selected.", "Item",ExpressionUUID->"c0ffee00-0007-4000-8000-000000000004"],
+
+Cell["No stratification or compressibility. The real Sun spans ~4\[Dash]5 density scale heights, which makes upflows broad and downflows narrow; the barotropic model is incompressible and uniform.", "Item",ExpressionUUID->"c0ffee00-0007-4000-8000-000000000005"],
+
+Cell["No Taylor\[Dash]Proudman constraint. This is a genuinely 3-D balance (invariance along the rotation axis), so real axis-aligned banana cells cannot arise from the correct mechanism in a 2-D surface model (Sections 1.2, 3.2).", "Item",ExpressionUUID->"c0ffee00-0007-4000-8000-000000000006"],
+
+Cell["No self-consistent differential rotation. The solar equator-fast profile emerges from correlated 3-D velocity components (Reynolds stresses, meridional circulation) that a single scalar \[Omega] cannot carry. The longitude twist on the cutaway faces is a viewing choice, not solar rotation.", "Item",ExpressionUUID->"c0ffee00-0007-4000-8000-000000000007"],
+
+Cell["No magnetism. No induction, hence no dynamo, no 11-year cycle, and no sunspots \[Dash] the very phenomena that motivate much of solar-convection research. To model any of this you need a 3-D anelastic (MHD) code (see the References and README_v6.md).", "Item",ExpressionUUID->"c0ffee00-0007-4000-8000-000000000008"],
+
+Cell["8.  The v6 Audit \[Dash] What Is Verified and What Is Not", "Section",ExpressionUUID->"c0ffee00-0008-4000-8000-000000000001"],
+
+Cell["v6 is a scientifically honest rebuild of an earlier v5 run whose physics claims did not survive scrutiny. Every checkable claim was re-derived and tested numerically against the saturated field (v6_critical_audit.md). The result is a clear split between a trustworthy SOLVER and a set of claims the field does NOT support.", "Text",ExpressionUUID->"c0ffee00-0008-4000-8000-000000000002"],
+
+Cell["Verified correct (the numerics are sound):", "Text",ExpressionUUID->"c0ffee00-0008-4000-8000-000000000003"],
+
+Cell["The advection conserves energy and enstrophy to ~1\[Times]\!\(\*SuperscriptBox[\(10\), \(-6\)]\) per step in an inviscid test \[Dash] the strongest single piece of evidence that the barotropic Jacobian and time step are correct.", "Item",ExpressionUUID->"c0ffee00-0008-4000-8000-000000000004"],
+
+Cell["The spherical Jacobian is metric-consistent (built from physical gradient components, avoiding the 1/cos\[Phi] singularity) and is effectively alias-free (0.07% vs a 2\[Times]-padded reference).", "Item",ExpressionUUID->"c0ffee00-0008-4000-8000-000000000005"],
+
+Cell["The Coriolis coefficient is fixed to 2\[CapitalOmega]/\!\(\*SqrtBox[\(3\)]\), giving f(pole) = 2\[CapitalOmega] = 80 exactly (Section 2.3.1); the \[Del]^8 hyperviscosity, the exact integrating-factor dissipation, and the \!\(\*SqrtBox[\(\[CapitalDelta]t\)]\) white-noise forcing scaling all check out.", "Item",ExpressionUUID->"c0ffee00-0008-4000-8000-000000000006"],
+
+Cell["Not achieved / honest caveats (properties of the run, not bugs in the solver):", "Text",ExpressionUUID->"c0ffee00-0008-4000-8000-000000000007"],
+
+Cell["Jets are NOT achieved. Zonal energy is ~3.7% \[Dash] essentially isotropic turbulence. The cascade broadened (a real improvement over v5), but the marginal Rhines/forcing separation (l_R \[TildeTilde] 23 vs forcing 60\[Dash]80) and the ~42% energy loss to hyperviscosity keep the inverse cascade too weak to organise jets.", "Item",ExpressionUUID->"c0ffee00-0008-4000-8000-000000000008"],
+
+Cell["The time integration is globally O(\[CapitalDelta]t) (first-order Lie split of a Heun advection step with an exact linear factor), not 2nd-order \[Dash] verified by a step-halving ratio of 2.00 (Section 4.3).", "Item",ExpressionUUID->"c0ffee00-0008-4000-8000-000000000009"],
+
+Cell["The interior reconstruction and the cutaway longitude twist are illustrative geometry, not solved dynamics; the display softens the true \!\(\*SuperscriptBox[\((r/R)\), \(l\)]\) decay and so overstates deep penetration of forcing-scale modes by ~10\[Times] (Section 5.2). All of this is honestly labelled in the code and captions.", "Item",ExpressionUUID->"c0ffee00-0008-4000-8000-00000000000a"],
 
 Cell["References", "Section",ExpressionUUID->"d1ccdba1-44ad-4d65-837c-53c1d8568080"],
 
@@ -1211,6 +1121,8 @@ Cambridge University Press. [Barotropic vorticity equation, geostrophic \
 turbulence, Taylor\[Dash]Proudman theorem.]\
 \>", "Text",ExpressionUUID->"7b7a5838-b878-4f5e-bcfd-247f9e3e2b37"],
 
+Cell["Rhines, P. B. (1975). Waves and turbulence on a beta-plane. Journal of Fluid Mechanics, 69, 417\[Dash]443. [The Rhines scale and the arrest of the inverse cascade into zonal jets.]", "Text",ExpressionUUID->"c0ffee00-0009-4000-8000-000000000001"],
+
 Cell["\<\
 Charney, J. G., Fj\[OSlash]rtoft, R. & von Neumann, J. (1950). Numerical \
 integration of the barotropic vorticity equation. Tellus, 2, 237\[Dash]254. \
@@ -1220,11 +1132,12 @@ integration of the barotropic vorticity equation. Tellus, 2, 237\[Dash]254. \
 Cell["", "Text",ExpressionUUID->"09ea3dc4-deb7-4975-ab28-291647be16f4"],
 
 Cell[BoxData[
- TextData[{"Simulation code: ", 
+ TextData[{"Simulation code: ",
    StyleBox[
-   "config.py, simulate.py, visualize.py", FontFamily -> "Courier", FontSize -> 
-    11], " \[Dash] barotropic vorticity solver (pyshtools) with a 3-D \
-spherical-shell cutaway renderer (matplotlib)."}]], "Text",ExpressionUUID->\
+   "config_v6.py, simulate_v6.py, visualize_v6.py", FontFamily -> "Courier",
+    FontSize -> 11], " \[Dash] 2-D barotropic vorticity solver (pyshtools) \
+with a 3-D spherical-shell cutaway renderer (matplotlib). Full audit in \
+v6_critical_audit.md; overview in README_v6.md."}]], "Text",ExpressionUUID->\
 "c68b4442-b3f1-4c53-a548-055ba290a94d"]
 },
 WindowSize->{900, 750},
