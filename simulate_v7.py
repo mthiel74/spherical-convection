@@ -38,7 +38,9 @@ from config_v7 import (OMEGA, LMAX, NU_HYPER, LINEAR_DRAG, FORCE_LMIN,
                        FRAME_SKIP, FRAMES_NPZ,
                        STATIONARITY_INTERVAL, STATIONARITY_WINDOW,
                        STATIONARITY_TOL, N_SPINUP_MIN,
-                       TIME_SCHEME, ETDRK4_M)
+                       TIME_SCHEME, ETDRK4_M,
+                       FORCE_BAND_SUM, EPSILON_TARGET, FORCE_FROM_EPSILON,
+                       FORCE_TYPE, FORCE_CORR_TIME)
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -139,6 +141,23 @@ def _etdrk4_coeffs(L, dt, M=32):
     return E, E2, Q, f1, f2, f3
 
 
+def effective_force_amp():
+    """
+    The forcing amplitude actually used (improvement #5a).
+
+    If config.FORCE_FROM_EPSILON is set, the amplitude is DERIVED from the target
+    energy-injection rate by inverting  ε = FORCE_AMP² · S_band  (config eq. 5a):
+
+            FORCE_AMP = √( EPSILON_TARGET / S_band ).
+
+    Otherwise the literal config.FORCE_AMP is used (exact v6/legacy behaviour).
+    Either way the resulting injection rate is  ε = amp² · S_band.
+    """
+    if FORCE_FROM_EPSILON:
+        return float(np.sqrt(EPSILON_TARGET / FORCE_BAND_SUM))
+    return float(FORCE_AMP)
+
+
 class SpectralVorticity:
     """Vorticity in spectral space (real 4π-normalised SH) + time stepping."""
 
@@ -176,12 +195,44 @@ class SpectralVorticity:
         self._f_lm = np.zeros((2, self.lmax + 1, self.lmax + 1))
         self._f_lm[0, 1, 0] = 2.0 * OMEGA / np.sqrt(3.0)
 
+        # ── Forcing set-up (improvement #5) ───────────────────────────────
+        # Effective amplitude (literal, or derived from ε if FORCE_FROM_EPSILON).
+        self._force_amp = effective_force_amp()
+        # Realised energy-injection rate ε = amp²·S_band (config eq. 5a).
+        self.epsilon = self._force_amp ** 2 * FORCE_BAND_SUM
+        self.force_type = FORCE_TYPE
+        if self.force_type not in ('white', 'ou'):
+            raise ValueError(f"FORCE_TYPE must be 'white' or 'ou', "
+                             f"got {self.force_type!r}")
+        # Per-coefficient white-noise amplitude amp_l = amp/√[l(l+1)] on the band
+        # (0 outside), broadcast to the (2,L+1,L+1) SHCoeffs layout.  The sin
+        # component (index 1) has no m=0 entry, so it is masked below.
+        self._amp_l = np.zeros((2, self.lmax + 1, self.lmax + 1))
+        for l in range(FORCE_LMIN, FORCE_LMAX + 1):
+            a = self._force_amp / np.sqrt(l * (l + 1))
+            self._amp_l[0, l, :l + 1] = a       # cos block: m = 0 … l
+            self._amp_l[1, l, 1:l + 1] = a       # sin block: m = 1 … l (no m=0)
+
+        # Ornstein–Uhlenbeck state (improvement #5b), only if FORCE_TYPE='ou'.
+        # Exact OU update over dt:  f ← a·f + b·ξ,  a = e^{−dt/τc}, drawing the
+        # increment std b so the process stays at its stationary variance
+        # Var(f_lm) = amp_l²/(2 τc) (config §5b).  Initialise f at that variance
+        # so there is no forcing spin-up transient.
+        if self.force_type == 'ou':
+            tau = FORCE_CORR_TIME
+            self._ou_a = np.exp(-DT / tau)                       # decay factor
+            self._ou_std = self._amp_l / np.sqrt(2.0 * tau)      # stationary std
+            # increment std b with Var(b·ξ) = Var·(1−a²)  (exact OU discretisation)
+            self._ou_b = self._ou_std * np.sqrt(1.0 - self._ou_a ** 2)
+            ou_rng = np.random.default_rng(7)
+            self._ou_f = self._ou_std * ou_rng.standard_normal(self._ou_std.shape)
+
         # Small random initial vorticity in the forcing band.
         rng = np.random.default_rng(42)
         omega_lm = np.zeros((2, self.lmax + 1, self.lmax + 1))
         for l in range(FORCE_LMIN, FORCE_LMAX + 1):
             for m in range(l + 1):
-                amp = FORCE_AMP * 0.1 / (l + 1)
+                amp = self._force_amp * 0.1 / (l + 1)
                 omega_lm[0, l, m] = rng.standard_normal() * amp
                 if m > 0:
                     omega_lm[1, l, m] = rng.standard_normal() * amp
@@ -215,16 +266,54 @@ class SpectralVorticity:
         jac_grid = pysh.SHGrid.from_array(jac, grid='DH')
         return self._to_lm(jac_grid)
 
-    # ── stochastic forcing (white in time, narrow band in l) ────────────
+    # ── stochastic forcing (improvement #5: white or OU, narrow band in l) ─
+
+    def _forcing(self, rng):
+        """
+        Vorticity increment δω_lm contributed by the stochastic forcing over one
+        step dt.  Dispatches on FORCE_TYPE (improvement #5b): a fresh √dt Wiener
+        increment ('white') or the tendency f_lm·dt of the persistent
+        Ornstein–Uhlenbeck field ('ou').
+        """
+        if self.force_type == 'ou':
+            return self._ou_forcing(rng)
+        return self._stochastic_forcing(rng)
 
     def _stochastic_forcing(self, rng):
+        """
+        White-in-time forcing: an independent Gaussian increment per band
+        coefficient with std amp_l·√dt, amp_l = amp/√[l(l+1)] (config §5a).  This
+        is a Wiener increment (∝ √dt), delta-correlated in time.  Kept as an
+        explicit per-degree loop so the RNG draw order — hence the realised
+        stream — is identical to v6 when the amplitude is unchanged.
+        """
         f_lm = np.zeros_like(self.omega_lm)
         for l in range(FORCE_LMIN, FORCE_LMAX + 1):
-            amp = FORCE_AMP / np.sqrt(l * (l + 1)) * np.sqrt(DT)
+            amp = self._force_amp / np.sqrt(l * (l + 1)) * np.sqrt(DT)
             f_lm[0, l, :l + 1] = rng.standard_normal(l + 1) * amp
             if l >= 1:
                 f_lm[1, l, 1:l + 1] = rng.standard_normal(l) * amp
         return f_lm
+
+    def _ou_forcing(self, rng):
+        """
+        Ornstein–Uhlenbeck (coloured) forcing, correlation time τ_c (config §5b).
+
+        Advance the persistent forcing field one step with the EXACT OU
+        discretisation (no time-discretisation bias in the stationary statistics)
+
+            f_lm ← a·f_lm + b·ξ ,   a = e^{−dt/τc},  b = std·√(1−a²),  ξ ~ N(0,1),
+
+        where std² = amp_l²/(2 τc) is the OU stationary variance (chosen so the
+        τc→0 limit reproduces the 'white' branch and the same ε; config §5b).
+        The forcing enters the vorticity as a SMOOTH tendency over the step, so
+        the increment returned is f_lm·dt (contrast the white branch's √dt Wiener
+        increment).  Off-band and illegal (sin, m=0) entries stay identically
+        zero because b and the initial field vanish there.
+        """
+        xi = rng.standard_normal(self._ou_f.shape)
+        self._ou_f = self._ou_a * self._ou_f + self._ou_b * xi
+        return self._ou_f * DT
 
     # ── time step (Strang split: ½-diss · Heun advection · ½-diss + forcing) ─
 
@@ -278,8 +367,9 @@ class SpectralVorticity:
         w = w + 0.5 * DT * (k1 + k2)
         # ½-step dissipation:  ω ← exp(L·dt/2) ω
         w = self._sqrt_visc * w
-        # add stochastic forcing after the split (white-in-time √dt increment)
-        w = w + self._stochastic_forcing(rng)
+        # add stochastic forcing after the split (white √dt Wiener increment, or
+        # OU tendency — improvement #5)
+        w = w + self._forcing(rng)
         self.omega_lm = w
         self.omega_lm[:, 0, 0] = 0.0          # keep mean vorticity zero
 
@@ -320,7 +410,8 @@ class SpectralVorticity:
         u = (self._E * u + Nu * self._f1
              + 2.0 * (Na + Nb) * self._f2 + Nc * self._f3)
         # add stochastic forcing after the deterministic ETDRK4 update
-        u = u + self._stochastic_forcing(rng)
+        # (white √dt Wiener increment, or OU tendency — improvement #5)
+        u = u + self._forcing(rng)
         self.omega_lm = u
         self.omega_lm[:, 0, 0] = 0.0          # keep mean vorticity zero
 

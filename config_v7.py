@@ -130,7 +130,64 @@ LINEAR_DRAG = 0.01
 #   the same amplitude at higher l injects less ENERGY (∝ 1/[l(l+1)]²).
 FORCE_LMIN = 100      # inject energy at l >= FORCE_LMIN
 FORCE_LMAX = 120      # inject energy at l <= FORCE_LMAX
-FORCE_AMP  = 2.2      # forcing amplitude (unchanged from v6)
+FORCE_AMP  = 2.2      # forcing amplitude (unchanged from v6; see FORCE_FROM_EPSILON)
+
+# ── Physically-grounded forcing (improvement #5; scientific_improvements.md §5) ─
+#
+# ── 5a.  Controlled energy-injection rate ε ──────────────────────────────────
+# The white-in-time forcing adds an independent Gaussian increment δω_lm to every
+# coefficient in the band each step, with per-coefficient standard deviation
+#           std(δω_lm) = amp_l·√dt,   amp_l = FORCE_AMP / √[l(l+1)].
+# Because the increment is independent of the current field, it adds ENSTROPHY at
+# rate ⟨δω_lm²⟩/dt = amp_l² per coefficient and ENERGY at rate amp_l²/[l(l+1)]
+# (energy per mode is E_lm = ω_lm²/[l(l+1)]).  Summing over the (2l+1) real
+# coefficients per degree l in the band gives the total energy-injection rate
+#
+#           ε = Σ_{l=LMIN}^{LMAX} (2l+1) · amp_l² / [l(l+1)]
+#             = FORCE_AMP² · Σ_{l=LMIN}^{LMAX} (2l+1) / [l(l+1)]²
+#             ≡ FORCE_AMP² · S_band .                                    (5a)
+#
+# So ε is fixed by FORCE_AMP and the band alone.  S_band is a pure geometric
+# constant of the forcing band (computed below); inverting (5a) lets us set the
+# amplitude FROM a target injection rate rather than choosing it arbitrarily:
+#           FORCE_AMP = √( EPSILON_TARGET / S_band ).
+# ε matters physically because it sets the frictional-arrest / jet-spacing scale
+# k_fr ~ (β³/ε)^{1/5} (Maltrud & Vallis 1991; improvement #1's zonostrophy k_β).
+#
+# S_band = Σ_band (2l+1)/[l(l+1)]²  — the per-amplitude² injection efficiency.
+FORCE_BAND_SUM = sum((2 * l + 1) / (l * (l + 1)) ** 2
+                     for l in range(FORCE_LMIN, FORCE_LMAX + 1))   # ≈ 3.17e-5
+
+# Target energy-injection rate ε (per unit time).  The default equals the ε the
+# legacy FORCE_AMP=2.2 injects (≈ 1.53e-4), so the default v7 run is unchanged.
+# Set FORCE_FROM_EPSILON=True to make ε the control knob and DERIVE FORCE_AMP.
+EPSILON_TARGET     = FORCE_AMP ** 2 * FORCE_BAND_SUM   # ≈ 1.53e-4
+FORCE_FROM_EPSILON = False   # True ⇒ FORCE_AMP := √(EPSILON_TARGET / S_band)
+
+# ── 5b.  Forcing temporal correlation: white vs Ornstein–Uhlenbeck ───────────
+# FORCE_TYPE selects the temporal statistics of the forcing:
+#   'white' — delta-correlated in time (the default; exact v6 behaviour).  Each
+#             step draws a fresh independent increment δω_lm = amp_l·√dt·ξ.
+#   'ou'    — a persistent forcing field f_lm with a FINITE correlation time τ_c,
+#             evolving as the Ornstein–Uhlenbeck (OU) stochastic process
+#                     df_lm = −(f_lm/τ_c) dt + σ_l dW ,
+#             and added to the vorticity as a smooth tendency  δω_lm = f_lm·dt.
+#
+#   MATH — the OU process.  The OU SDE above is the UNIQUE stationary Gaussian
+#   Markov process; its stationary autocovariance is the exponential
+#           C(s) = ⟨f(t) f(t+s)⟩ = (σ_l² τ_c / 2) · exp(−|s| / τ_c),
+#   with stationary variance C(0) = σ_l² τ_c / 2 and integral time τ_c.  We fix
+#   σ_l by demanding that, as τ_c → 0, the OU tendency δω = f·dt converge to the
+#   SAME white-noise forcing as the 'white' branch (so ε is unchanged and the two
+#   branches are directly comparable).  A tendency driven by a stationary process
+#   f with ∫₋∞^∞ C(s) ds = amp_l² is white-noise-equivalent (spectral density
+#   amp_l² at zero frequency); for OU ∫ C ds = σ_l² τ_c², hence
+#           σ_l² = amp_l² / τ_c²      ⇒   Var(f_lm) = C(0) = amp_l² / (2 τ_c).
+#   The field is initialised at this stationary variance (no forcing transient).
+#   Coloured forcing removes the unphysical white-noise artefact and changes the
+#   injection statistics (Constantinou, Farrell & Ioannou 2014, JAS 71, 1818).
+FORCE_TYPE      = 'white'   # 'white' (default, = v6) or 'ou'
+FORCE_CORR_TIME = 1.0       # OU correlation time τ_c (time units); used iff 'ou'
 
 # ── Zonostrophy target (documentation) ───────────────────────────────────────
 # Zonostrophy index (Galperin, Sukoriansky et al. 2006, Nonlin. Proc. Geophys.):
