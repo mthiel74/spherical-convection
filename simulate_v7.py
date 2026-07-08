@@ -40,7 +40,8 @@ from config_v7 import (OMEGA, LMAX, NU_HYPER, LINEAR_DRAG, FORCE_LMIN,
                        STATIONARITY_TOL, N_SPINUP_MIN,
                        TIME_SCHEME, ETDRK4_M,
                        FORCE_BAND_SUM, EPSILON_TARGET, FORCE_FROM_EPSILON,
-                       FORCE_TYPE, FORCE_CORR_TIME)
+                       FORCE_TYPE, FORCE_CORR_TIME,
+                       SVV_ENABLED, SVV_EPS0, SVV_LCUT)
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -52,33 +53,63 @@ def _laplacian_eigenvalues(lmax):
     return ev
 
 
-def _dissipation_filter(lmax, nu, drag, dt):
+def _svv_rate(lmax, eps0, lcut):
+    """
+    Spectral-vanishing-viscosity decay rate  ε_SVV(l)·λ  (improvement #7).
+
+    SVV (Tadmor 1989) is a Laplacian-type sink −ε_SVV(l)·λ ω with the smooth
+    cutoff kernel (config §7, with L = lmax)
+
+        ε_SVV(l) = ε₀·exp[ −((L−l)/(l−l_cut))² ]   (l > l_cut),   0  (l ≤ l_cut).
+
+    Returns the DECAY RATE array ε_SVV(l)·λ, λ = l(l+1), in the (2,L+1,L+1)
+    SHCoeffs layout (≥ 0; identically 0 for l ≤ l_cut), ready to add to the
+    linear operator.  Adding it as a rate keeps the linear part diagonal, so the
+    exact integrating factor / ETDRK4 machinery is unchanged.
+    """
+    l = np.arange(lmax + 1).astype(float)
+    lam = l * (l + 1.0)                                  # λ per degree
+    kernel = np.zeros(lmax + 1)
+    hi = l > lcut
+    kernel[hi] = np.exp(-((lmax - l[hi]) / (l[hi] - lcut)) ** 2)
+    rate_l = eps0 * kernel * lam                         # ε_SVV(l)·λ per degree
+    rate = np.zeros((2, lmax + 1, lmax + 1))
+    for ll in range(lmax + 1):
+        rate[:, ll, :ll + 1] = rate_l[ll]
+    return rate
+
+
+def _dissipation_filter(lmax, nu, drag, dt, svv_rate=None):
     """
     Exact integrating factor for the linear part over one step:
 
-        exp( -(μ + ν λ⁴) dt ),   λ = l(l+1).
+        exp( -(μ + ν λ⁴ + ε_SVV(l)·λ) dt ),   λ = l(l+1).
 
     ν λ⁴ is scale-selective ∇⁸ hyperdiffusion (bites only near truncation); μ is
-    uniform linear drag.  Returns a (2, L+1, L+1) multiplicative array.
+    uniform linear drag; ε_SVV(l)·λ is the optional spectral vanishing viscosity
+    (improvement #7, 0 unless SVV_ENABLED).  Returns a (2,L+1,L+1) array.
     """
     ev = _laplacian_eigenvalues(lmax)   # negative
     lam4 = ev ** 4                       # positive
-    return np.exp(-(drag + nu * lam4) * dt)
+    svv = 0.0 if svv_rate is None else svv_rate
+    return np.exp(-(drag + nu * lam4 + svv) * dt)
 
 
-def _linear_operator(lmax, nu, drag):
+def _linear_operator(lmax, nu, drag, svv_rate=None):
     """
     The diagonal linear operator of the split  ∂ω/∂t = L ω + N(ω):
 
-        L_l = −(μ + ν λ⁴),   λ = l(l+1).
+        L_l = −(μ + ν λ⁴ + ε_SVV(l)·λ),   λ = l(l+1).
 
-    Returns a (2, L+1, L+1) array matching the SHCoeffs layout, ≤ 0 everywhere
-    (pure decay).  exp(L·dt) is exactly the full-step integrating factor
-    `_dissipation_filter`.
+    Includes the optional spectral vanishing viscosity ε_SVV(l)·λ (improvement
+    #7, 0 unless SVV_ENABLED).  Returns a (2,L+1,L+1) array matching the SHCoeffs
+    layout, ≤ 0 everywhere (pure decay).  exp(L·dt) is exactly the full-step
+    integrating factor `_dissipation_filter`.
     """
     ev = _laplacian_eigenvalues(lmax)
     lam4 = ev ** 4
-    return -(drag + nu * lam4)
+    svv = 0.0 if svv_rate is None else svv_rate
+    return -(drag + nu * lam4 + svv)
 
 
 def _etdrk4_coeffs(L, dt, M=32):
@@ -212,12 +243,18 @@ class SpectralVorticity:
         # Confirm the DH2 grid dealiases the quadratic Jacobian (improvement #6).
         self.dealiasing = check_dealiasing(self.lmax, verbose=True)
         self._ev = _laplacian_eigenvalues(self.lmax)          # (2,L+1,L+1)
-        # Full-step linear integrating factor exp(−(μ+νλ⁴)·dt) …
-        self._visc = _dissipation_filter(self.lmax, NU_HYPER, LINEAR_DRAG, DT)
-        # … and the HALF-step factor exp(−(μ+νλ⁴)·dt/2) = √(visc) needed by the
-        # symmetric Strang split L(dt/2)·N(dt)·L(dt/2)  (improvement #3).
+        # Optional spectral vanishing viscosity rate ε_SVV(l)·λ (improvement #7);
+        # 0 unless SVV_ENABLED.  Supplements the ∇⁸ hyperviscosity in the linear
+        # operator (both act only near the truncation).
+        self._svv = (_svv_rate(self.lmax, SVV_EPS0, SVV_LCUT)
+                     if SVV_ENABLED else None)
+        # Full-step linear integrating factor exp(−(μ+νλ⁴+ε_SVV·λ)·dt) …
+        self._visc = _dissipation_filter(self.lmax, NU_HYPER, LINEAR_DRAG, DT,
+                                         svv_rate=self._svv)
+        # … and the HALF-step factor = √(visc) needed by the symmetric Strang
+        # split L(dt/2)·N(dt)·L(dt/2)  (improvement #3).
         self._sqrt_visc = _dissipation_filter(self.lmax, NU_HYPER, LINEAR_DRAG,
-                                              DT / 2.0)
+                                              DT / 2.0, svv_rate=self._svv)
 
         # Time-integration scheme (improvement #4).  ETDRK4 needs the diagonal
         # linear operator L and its exponential φ-function coefficients; Strang
@@ -226,7 +263,8 @@ class SpectralVorticity:
         if self.time_scheme not in ('strang', 'etdrk4'):
             raise ValueError(f"TIME_SCHEME must be 'strang' or 'etdrk4', "
                              f"got {self.time_scheme!r}")
-        self._L = _linear_operator(self.lmax, NU_HYPER, LINEAR_DRAG)
+        self._L = _linear_operator(self.lmax, NU_HYPER, LINEAR_DRAG,
+                                   svv_rate=self._svv)
         if self.time_scheme == 'etdrk4':
             (self._E, self._E2, self._Q,
              self._f1, self._f2, self._f3) = _etdrk4_coeffs(self._L, DT, ETDRK4_M)

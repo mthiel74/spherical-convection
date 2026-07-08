@@ -201,6 +201,34 @@ FORCE_CORR_TIME = 1.0       # OU correlation time τ_c (time units); used iff 'o
 # balance and a calibrated normalisation constant, both good only to ~factor 2.
 ZONOSTROPHY_TARGET = 2.0   # want measured R_β ≳ this
 
+# ── Spectral vanishing viscosity (improvement #7; scientific_improvements.md §7)
+# SVV (Tadmor 1989, SIAM J. Numer. Anal. 26, 30) is a scale-selective sink that
+# is IDENTICALLY ZERO over the resolved/inertial range and switches on smoothly
+# only near the truncation.  Unlike a plain Laplacian it does not damp the large
+# scales; unlike a sharp spectral cutoff it is smooth (no Gibbs); and being a
+# genuine (modified) viscosity it provides the entropy dissipation that
+# guarantees convergence to the correct weak solution — Tadmor's result.
+#
+#   THE SVV KERNEL.  SVV acts as a Laplacian viscosity −ε_SVV(l)·λ ω (λ=l(l+1))
+#   with an l-dependent coefficient that ramps up above a cutoff degree l_cut:
+#
+#       ε_SVV(l) = ε₀ · exp[ −((L − l)/(l − l_cut))² ]   for l > l_cut,
+#                = 0                                       for l ≤ l_cut,
+#
+#   with L = LMAX.  The kernel is 0 at l = l_cut, rises smoothly (it is ≈0 for a
+#   band just above l_cut because (l−l_cut) is tiny there), and reaches ε₀ at the
+#   truncation l = L.  The standard choice is l_cut ~ √L (Maday & Tadmor 1989):
+#           l_cut = √170 ≈ 13.
+#   SVV SUPPLEMENTS the ∇⁸ hyperviscosity here (both act only near the cutoff);
+#   set NU_HYPER = 0 to use SVV as the sole small-scale sink (a pure replacement).
+#
+#   TUNING ε₀.  At the truncation the SVV decay rate is ε₀·λ_max = ε₀·L(L+1).
+#   Matching the hyperviscous cutoff rate there (ν λ_max⁴ ≈ 4 ⇒ τ ≈ 0.25 tu):
+#           ε₀ ≈ 4 / (170·171) ≈ 1.4e-4.
+SVV_ENABLED = False      # supplement the ∇⁸ sink with SVV (default off = v6)
+SVV_LCUT    = 13         # l_cut ≈ √LMAX — SVV is exactly 0 for l ≤ l_cut
+SVV_EPS0    = 1.4e-4     # ε₀ — SVV strength at the truncation (τ≈0.25 tu at l=L)
+
 # ── Time stepping ───────────────────────────────────────────────────────────
 # The linear (dissipation+drag) part is integrated EXACTLY by the integrating
 # factor, so dt is limited only by the advective CFL of the Heun (RK2) nonlinear
