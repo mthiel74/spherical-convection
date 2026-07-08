@@ -33,7 +33,9 @@ import pyshtools as pysh
 
 from config_v7 import (OMEGA, LMAX, NU_HYPER, LINEAR_DRAG, FORCE_LMIN,
                        FORCE_LMAX, FORCE_AMP, DT, N_SPINUP, N_FRAMES,
-                       FRAME_SKIP, FRAMES_NPZ)
+                       FRAME_SKIP, FRAMES_NPZ,
+                       STATIONARITY_INTERVAL, STATIONARITY_WINDOW,
+                       STATIONARITY_TOL, N_SPINUP_MIN)
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -185,8 +187,11 @@ def diagnostics(omega_lm):
     zonal = e_lm[:, 0].sum() / tot_e                  # m=0 column
 
     omega_rms = np.sqrt(c2.sum())
+    enstrophy = c2.sum()                              # Z = Σ_lm c_lm²
+    energy = e_lm.sum()                               # E = Σ_lm c_lm²/[l(l+1)]
     return dict(below=below, inband=inband, above=above, zonal=zonal,
-                rms=omega_rms, drag_ratio=omega_rms / LINEAR_DRAG)
+                rms=omega_rms, drag_ratio=omega_rms / LINEAR_DRAG,
+                energy=energy, enstrophy=enstrophy)
 
 
 def _fmt(d):
@@ -196,25 +201,97 @@ def _fmt(d):
             f"ω_rms={d['rms']:5.2f}  ω_rms/μ={d['drag_ratio']:5.1f}")
 
 
+# ── auto-stationarity detection (improvement #2) ─────────────────────────────
+
+def _window_is_stationary(samples, tol):
+    """
+    True when EVERY monitored quantity has plateaued across the sliding window.
+
+    `samples` is a sequence of (energy, enstrophy, zonal) tuples spanning the
+    last STATIONARITY_WINDOW steps.  For each of the three columns q we form the
+    fractional peak-to-peak drift
+
+            drift(q) = (max q − min q) / |mean q|
+
+    and require drift(q) < tol for all three.  Using the window spread rather
+    than a first-vs-last difference rejects a run that merely happens to return
+    to its starting value while still oscillating, and one that drifts slowly but
+    monotonically — both are non-stationary.  Energy and enstrophy (the two
+    quadratic invariants) settling together with the zonal fraction is the
+    signature of a statistically steady 2-D turbulent flow (improvement #2).
+    """
+    arr = np.asarray(samples, dtype=float)            # (n_samples, 3)
+    spread = arr.max(axis=0) - arr.min(axis=0)
+    mean = np.abs(arr.mean(axis=0)) + 1e-300
+    return bool(np.all(spread / mean < tol))
+
+
+def spinup_to_stationary(model, rng, n_min=N_SPINUP_MIN, n_max=N_SPINUP,
+                         interval=STATIONARITY_INTERVAL,
+                         window=STATIONARITY_WINDOW, tol=STATIONARITY_TOL,
+                         verbose=True):
+    """
+    Advance `model` until the flow is statistically stationary, then return the
+    number of steps taken.
+
+    Instead of a fixed spin-up length, monitor the energy E, enstrophy Z and
+    zonal energy fraction every `interval` steps and keep the samples covering
+    the last `window` steps.  As soon as all three have drifted by less than
+    `tol` (2%) across that sliding window — AND at least `n_min` steps have been
+    taken (min guard) — declare the flow statistically steady and stop.  `n_max`
+    (= N_SPINUP) is the hard upper guard: if stationarity is never detected we
+    stop there regardless, so the routine always terminates.
+
+    The window holds  window // interval  samples (e.g. 5000/1000 = 5).  The
+    stationarity test only fires once the window is full, i.e. after at least
+    `window` steps of history exist.
+    """
+    from collections import deque
+    maxlen = max(1, window // interval)
+    samples = deque(maxlen=maxlen)                    # recent (E, Z, zonal)
+
+    if verbose:
+        print(f"Spinning up (auto-stationary: |drift|<{tol:.0%} of E,Z,zonal "
+              f"over {window} steps; guards {n_min}…{n_max}) …", flush=True)
+
+    steps = 0
+    for i in range(n_max):
+        model.step(rng)
+        steps = i + 1
+        if steps % interval == 0:
+            d = diagnostics(model.omega_lm)
+            samples.append((d['energy'], d['enstrophy'], d['zonal']))
+            full = len(samples) == maxlen
+            stationary = full and _window_is_stationary(samples, tol)
+            if verbose:
+                flag = " STATIONARY" if (stationary and steps >= n_min) else ""
+                print(f"  spinup {steps:6d}/{n_max}   {_fmt(d)}{flag}", flush=True)
+            if stationary and steps >= n_min:
+                if verbose:
+                    print(f"  → statistically steady after {steps} steps "
+                          f"(< {n_max} max); begin recording.", flush=True)
+                return steps
+
+    if verbose:
+        print(f"  → reached max spin-up {n_max} steps without meeting the "
+              f"stationarity tolerance; begin recording anyway.", flush=True)
+    return steps
+
+
 # ── run simulation ───────────────────────────────────────────────────────────
 
 def run_simulation(n_spinup=N_SPINUP, n_frames=N_FRAMES, frame_skip=FRAME_SKIP,
                    verbose=True):
     """
-    Spin up to a statistically steady state, then record n_frames snapshots of
-    the spectral coefficients.  Returns (coeff_frames, final_diag) where
-    coeff_frames is a list of (2, L+1, L+1) arrays.
+    Spin up to a statistically steady state (auto-detected — improvement #2),
+    then record n_frames snapshots of the spectral coefficients.  Returns
+    (coeff_frames, final_diag) where coeff_frames is a list of (2, L+1, L+1)
+    arrays.  `n_spinup` is passed through as the maximum spin-up guard.
     """
     rng = np.random.default_rng(0)
     model = SpectralVorticity()
 
-    if verbose:
-        print(f"Spinning up for {n_spinup} steps …", flush=True)
-    for i in range(n_spinup):
-        model.step(rng)
-        if verbose and (i + 1) % 1000 == 0:
-            print(f"  spinup {i+1:6d}/{n_spinup}   {_fmt(diagnostics(model.omega_lm))}",
-                  flush=True)
+    spinup_to_stationary(model, rng, n_max=n_spinup, verbose=verbose)
 
     frames = []
     if verbose:

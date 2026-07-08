@@ -170,6 +170,33 @@ N_SPINUP   = 420000   # steps before recording (= 504 tu ≈ 5 drag times)
 N_FRAMES   = 200      # frames to record
 FRAME_SKIP = 10       # simulation steps between frames
 
+# ── Auto-stationarity detection (improvement #2) ─────────────────────────────
+# Rather than always spinning up for the full fixed N_SPINUP, monitor three
+# integral invariants of the flow and stop as soon as the flow is statistically
+# steady — but never before N_SPINUP_MIN nor after N_SPINUP (the guards).
+#
+#   WHAT IS MONITORED (all three must settle; see simulate_v7.diagnostics):
+#     • energy       E = Σ_lm c_lm²/[l(l+1)]     (total kinetic energy, Parseval)
+#     • enstrophy    Z = Σ_lm c_lm²              (total enstrophy)
+#     • zonal frac.  E_zonal/E   (m=0 energy fraction — the jet indicator)
+#   Energy and enstrophy are the two quadratic invariants of 2-D turbulence;
+#   the zonal fraction is the quantity whose 200-frame −26% drift flagged the v6
+#   window as a transient (v6_critical_audit §4.2).  Requiring all three to
+#   plateau is a stricter, more honest stationarity test than any single one.
+#
+#   THE TEST.  Sample the three quantities every STATIONARITY_INTERVAL steps and
+#   keep the samples spanning the last STATIONARITY_WINDOW steps (a sliding
+#   window of W/interval samples).  The flow is declared statistically stationary
+#   when, for EACH quantity q over the window,
+#           (max q − min q) / |mean q|  <  STATIONARITY_TOL .
+#   i.e. the peak-to-peak drift across a full window is below the tolerance.
+#   Using the window spread (not a two-point difference) rejects both slow drift
+#   and large sampling oscillations.
+STATIONARITY_INTERVAL = 1000     # steps between stationarity samples
+STATIONARITY_WINDOW   = 5000     # sliding-window length (steps); W/interval samples
+STATIONARITY_TOL      = 0.02     # max fractional peak-to-peak drift over window (2%)
+N_SPINUP_MIN          = 20000    # never declare stationary before this (min guard)
+
 # ── Output ──────────────────────────────────────────────────────────────────
 OUTPUT_GIF = "output_v7.gif"
 OUTPUT_MP4 = "output_v7.mp4"
