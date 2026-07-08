@@ -21,8 +21,10 @@ scientific_improvements.md §1.
 
 Improvements implemented on top of the v6 solver:
   • #2  auto-stationarity detection during spin-up  (spinup_to_stationary)
-  • #3  STRANG (2nd-order) operator splitting for the time step
+  • #3  STRANG (2nd-order) operator splitting for the time step  (default)
         S(dt) = L(dt/2)·N(dt)·L(dt/2)  — replaces the old Lie–Trotter O(dt) split
+  • #4  optional ETDRK4 (4th-order exponential integrator) — selectable via
+        config.TIME_SCHEME='etdrk4'; treats the diagonal linear operator exactly
 
 It is NOT a convection model — there is no buoyancy, stratification, energy
 equation or vertical velocity.  See README_v6.md.
@@ -35,7 +37,8 @@ from config_v7 import (OMEGA, LMAX, NU_HYPER, LINEAR_DRAG, FORCE_LMIN,
                        FORCE_LMAX, FORCE_AMP, DT, N_SPINUP, N_FRAMES,
                        FRAME_SKIP, FRAMES_NPZ,
                        STATIONARITY_INTERVAL, STATIONARITY_WINDOW,
-                       STATIONARITY_TOL, N_SPINUP_MIN)
+                       STATIONARITY_TOL, N_SPINUP_MIN,
+                       TIME_SCHEME, ETDRK4_M)
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -61,6 +64,81 @@ def _dissipation_filter(lmax, nu, drag, dt):
     return np.exp(-(drag + nu * lam4) * dt)
 
 
+def _linear_operator(lmax, nu, drag):
+    """
+    The diagonal linear operator of the split  ∂ω/∂t = L ω + N(ω):
+
+        L_l = −(μ + ν λ⁴),   λ = l(l+1).
+
+    Returns a (2, L+1, L+1) array matching the SHCoeffs layout, ≤ 0 everywhere
+    (pure decay).  exp(L·dt) is exactly the full-step integrating factor
+    `_dissipation_filter`.
+    """
+    ev = _laplacian_eigenvalues(lmax)
+    lam4 = ev ** 4
+    return -(drag + nu * lam4)
+
+
+def _etdrk4_coeffs(L, dt, M=32):
+    """
+    ETDRK4 exponential-integrator coefficients (Cox & Matthews 2002; Kassam &
+    Trefethen 2005) for  ∂ω/∂t = L ω + N(ω)  with L DIAGONAL (array `L`).
+
+    ── The scheme.  With h = dt and the matrix exponential of the linear part,
+    ETDRK4 advances one step as (Kassam & Trefethen 2005, eqs. 2.5–2.9):
+
+        Nu = N(uₙ)
+        a  = E2·uₙ + Q·Nu
+        Na = N(a)
+        b  = E2·uₙ + Q·Na
+        Nb = N(b)
+        c  = E2·a  + Q·(2 Nb − Nu)
+        Nc = N(c)
+        uₙ₊₁ = E·uₙ + Nu·f1 + 2(Na+Nb)·f2 + Nc·f3
+
+    where, with the φ-functions φ₁,φ₂,φ₃,
+
+        E  = e^{hL},   E2 = e^{hL/2},   Q  = (h/2) φ₁(hL/2),
+        f1 = h [ −4 − hL + e^{hL}(4 − 3hL + (hL)²) ] / (hL)³,
+        f2 = h [  2 + hL + e^{hL}(−2 + hL)          ] / (hL)³,
+        f3 = h [ −4 − 3hL − (hL)² + e^{hL}(4 − hL)  ] / (hL)³,
+        Q  = h [ e^{hL/2} − 1 ] / (hL).
+
+    ── Why the contour integral.  Evaluated naively these quotients suffer
+    CATASTROPHIC CANCELLATION as z = hL → 0 (here |z| ≲ 5e-3 for every mode, so
+    the naive form loses ~all significant digits).  φₖ(z) are ENTIRE functions,
+    so by Cauchy's integral formula their value equals the mean over any circle
+    enclosing z.  Kassam & Trefethen therefore replace each pointwise evaluation
+    by the average of the integrand over M points equally spaced on a unit
+    circle centred at z:
+
+        φₖ(z) ≈ (1/M) Σ_{j} g_k( z + e^{iθ_j} ),   θ_j = 2π(j+½)/M,
+
+    which is cancellation-free (the integrand is O(1) on the circle) and, because
+    the imaginary parts cancel in conjugate pairs, its real part is exact.  We
+    take the real part at the end since L is real.
+
+    Returns (E, E2, Q, f1, f2, f3), each a real array with L's shape.
+    """
+    h = dt
+    z = (h * L)[..., None]                                   # (...,1) centres
+    theta = 2.0 * np.pi * (np.arange(1, M + 1) - 0.5) / M    # (M,)
+    r = np.exp(1j * theta)                                   # unit-circle points
+    zc = z + r                                               # (..., M) contour
+
+    E  = np.exp(h * L)
+    E2 = np.exp(h * L / 2.0)
+    # Q = h·φ₁(z/2) = h·mean[(e^{z/2}−1)/z]
+    Q  = h * np.mean((np.exp(zc / 2.0) - 1.0) / zc, axis=-1).real
+    zc3 = zc ** 3
+    f1 = h * np.mean((-4.0 - zc + np.exp(zc) * (4.0 - 3.0 * zc + zc ** 2)) / zc3,
+                     axis=-1).real
+    f2 = h * np.mean((2.0 + zc + np.exp(zc) * (-2.0 + zc)) / zc3, axis=-1).real
+    f3 = h * np.mean((-4.0 - 3.0 * zc - zc ** 2 + np.exp(zc) * (4.0 - zc)) / zc3,
+                     axis=-1).real
+    return E, E2, Q, f1, f2, f3
+
+
 class SpectralVorticity:
     """Vorticity in spectral space (real 4π-normalised SH) + time stepping."""
 
@@ -73,6 +151,18 @@ class SpectralVorticity:
         # symmetric Strang split L(dt/2)·N(dt)·L(dt/2)  (improvement #3).
         self._sqrt_visc = _dissipation_filter(self.lmax, NU_HYPER, LINEAR_DRAG,
                                               DT / 2.0)
+
+        # Time-integration scheme (improvement #4).  ETDRK4 needs the diagonal
+        # linear operator L and its exponential φ-function coefficients; Strang
+        # needs only the filters above.  Precompute ETDRK4 coefficients once.
+        self.time_scheme = TIME_SCHEME
+        if self.time_scheme not in ('strang', 'etdrk4'):
+            raise ValueError(f"TIME_SCHEME must be 'strang' or 'etdrk4', "
+                             f"got {self.time_scheme!r}")
+        self._L = _linear_operator(self.lmax, NU_HYPER, LINEAR_DRAG)
+        if self.time_scheme == 'etdrk4':
+            (self._E, self._E2, self._Q,
+             self._f1, self._f2, self._f3) = _etdrk4_coeffs(self._L, DT, ETDRK4_M)
 
         # Inverse Laplacian eigenvalues (ψ = ∇⁻²ω); l=0 mode is 0.
         self._inv_ev = np.zeros_like(self._ev)
@@ -145,6 +235,13 @@ class SpectralVorticity:
         return -self._jacobian_lm(psi_lm, abs_vor_lm)
 
     def step(self, rng):
+        """Advance one step with the configured scheme (config.TIME_SCHEME)."""
+        if self.time_scheme == 'etdrk4':
+            self._step_etdrk4(rng)
+        else:
+            self._step_strang(rng)
+
+    def _step_strang(self, rng):
         """
         Advance one step with STRANG (2nd-order) operator splitting
         (improvement #3).
@@ -184,6 +281,47 @@ class SpectralVorticity:
         # add stochastic forcing after the split (white-in-time √dt increment)
         w = w + self._stochastic_forcing(rng)
         self.omega_lm = w
+        self.omega_lm[:, 0, 0] = 0.0          # keep mean vorticity zero
+
+    def _step_etdrk4(self, rng):
+        """
+        Advance one step with ETDRK4 — exponential time-differencing Runge–Kutta,
+        4th order (Cox & Matthews 2002; Kassam & Trefethen 2005; improvement #4).
+
+        For  ∂ω/∂t = L ω + N(ω)  with L = −(μ + ν λ⁴) diagonal and
+        N(ω) = −J(ψ, ω+f), the linear part is advanced EXACTLY by e^{Lh} while
+        the nonlinear part is integrated at 4th order.  Using the precomputed
+        φ-function coefficients (see _etdrk4_coeffs) E, E2, Q, f1, f2, f3:
+
+            Nu = N(uₙ)
+            a  = E2·uₙ + Q·Nu ;             Na = N(a)
+            b  = E2·uₙ + Q·Na ;             Nb = N(b)
+            c  = E2·a  + Q·(2 Nb − Nu) ;    Nc = N(c)
+            uₙ₊₁ = E·uₙ + Nu·f1 + 2(Na+Nb)·f2 + Nc·f3
+
+        This is the exact-linear analogue of classical RK4: when L→0 the φ-
+        functions reduce to E=E2=1, Q=f2=h/6·…, and the update collapses to RK4.
+        The stiff hyperviscous/drag decay is handled to machine precision, so no
+        stability restriction comes from L.
+
+        As in the Strang step, the white-in-time stochastic forcing is a √dt
+        Wiener increment (not a smooth tendency), so it is added AFTER the
+        deterministic ETDRK4 update rather than inside the N evaluations, which
+        would mis-scale it.
+        """
+        u = self.omega_lm
+        Nu = self._tendency(u)
+        a = self._E2 * u + self._Q * Nu
+        Na = self._tendency(a)
+        b = self._E2 * u + self._Q * Na
+        Nb = self._tendency(b)
+        c = self._E2 * a + self._Q * (2.0 * Nb - Nu)
+        Nc = self._tendency(c)
+        u = (self._E * u + Nu * self._f1
+             + 2.0 * (Na + Nb) * self._f2 + Nc * self._f3)
+        # add stochastic forcing after the deterministic ETDRK4 update
+        u = u + self._stochastic_forcing(rng)
+        self.omega_lm = u
         self.omega_lm[:, 0, 0] = 0.0          # keep mean vorticity zero
 
     # ── output ──────────────────────────────────────────────────────────

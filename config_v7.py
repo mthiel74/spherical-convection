@@ -158,6 +158,25 @@ ZONOSTROPHY_TARGET = 2.0   # want measured R_β ≳ this
 #   1/Ω ≈ 0.15 tu ≫ dt.
 DT         = 1.2e-3   # timestep (smaller than v6's 1.5e-3 for T170 stability)
 
+# ── Time-integration scheme (improvements #3 / #4) ───────────────────────────
+# 'strang'  — Strang (2nd-order) operator split L(dt/2)·N(dt)·L(dt/2) (default,
+#             improvement #3): cheap, 2nd order, exact linear part.
+# 'etdrk4'  — ETDRK4 exponential time-differencing Runge–Kutta (improvement #4,
+#             Cox & Matthews 2002; Kassam & Trefethen 2005): treats the diagonal
+#             linear operator L = −(μ + ν λ⁴) EXACTLY (to machine precision) and
+#             the nonlinear Jacobian at 4th order.  ~4 Jacobian evaluations/step
+#             vs Strang's 2, so ~2× costlier per step but far more accurate on
+#             the stiff linear term — worth it at higher resolution/longer dt.
+# The white-in-time stochastic forcing is added as a separate √dt increment
+# after the deterministic substep in BOTH schemes (it is a Wiener increment, not
+# a smooth tendency, so it must not be folded into the RK evaluations of N).
+TIME_SCHEME = 'strang'
+# Kassam–Trefethen contour-integral averaging for the ETDRK4 φ-functions: number
+# of equally-spaced points on the unit circle around each eigenvalue.  M=32 is
+# the standard choice; it removes the catastrophic cancellation in (e^z−1)/z and
+# the higher φ-functions when |z| = |L·dt| is small (our case: |L·dt| ≲ 5e-3).
+ETDRK4_M = 32
+
 #   N_SPINUP — reach a genuine statistically steady state (improvement #2).
 #   Weaker drag ⇒ longer memory: τ_drag = 1/μ = 100 tu.  Require ≥5 drag times:
 #           N_SPINUP = 5·τ_drag/dt = 5·100/1.2e-3 = 4.17e5  →  420000 steps
