@@ -281,7 +281,9 @@ def _inner_core(coeffs, cam, vmax):
     rgba = np.concatenate([rgb, np.ones((*shade.shape, 1))], axis=-1)
 
     verts = _mesh_quads(X, Y, Z)
-    return verts, rgba.reshape(-1, 4)
+    # Return the core's own colour scale (vmax) so the caller can annotate how
+    # much it is amplified relative to the surface colorbar (see render_frame).
+    return verts, rgba.reshape(-1, 4), vmax
 
 
 # ── boundary curves on the three cut planes ───────────────────────────────
@@ -375,12 +377,13 @@ def render_frame(coeffs, frame_idx, total_frames, t_val, figsize_px=None):
     cam = np.array([np.cos(er) * np.cos(ar), np.cos(er) * np.sin(ar),
                     np.sin(er)])
 
+    core_verts, core_rgba, core_vmax = _inner_core(coeffs, cam, vmax)
     verts_all, rgba_all = [], []
     for v, c in (_outer_surface(sample, vmax),
                  _equatorial_face(coeffs, vmax),
                  _meridional_face(coeffs, vmax, CUTAWAY_LON_START),
                  _meridional_face(coeffs, vmax, CUTAWAY_LON_END),
-                 _inner_core(coeffs, cam, vmax)):
+                 (core_verts, core_rgba)):
         verts_all.append(v); rgba_all.append(c)
     verts = np.concatenate(verts_all, axis=0)
     rgba = np.concatenate(rgba_all, axis=0)
@@ -411,6 +414,14 @@ def render_frame(coeffs, frame_idx, total_frames, t_val, figsize_px=None):
     fig.text(0.46, 0.905,
              rf"$\omega'_z$   (not convection — see README_v6)   t = {t_val:5.1f}",
              ha='center', fontsize=9, color='0.25')
+    # Honesty note: the inner core is coloured on its OWN (weaker) amplitude
+    # scale, not the surface colorbar; state the amplification so the viewer
+    # knows a saturated-red core is ~core_vmax, not the colorbar's ±vmax.
+    core_amp = vmax / (core_vmax + 1e-12)
+    fig.text(0.46, 0.05,
+             f"inner core coloured on its own scale: ×{core_amp:.0f} amplified "
+             f"vs the colorbar (core |ω|≲{core_vmax:.2g})",
+             ha='center', fontsize=7.5, color='0.4')
     fig.subplots_adjust(left=-0.02, right=0.92, bottom=-0.02, top=0.92)
     return fig
 
