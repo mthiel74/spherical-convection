@@ -1,0 +1,18 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Scratch / experimental files
+scratch_*
+
+# Large binary data
+*.npz
+*.npy
+
+# Reference material (not ours)
+nasa_original.gif
+
+# Old / intermediate output videos
+output.mp4
+output_v3.mp4
+output_v4.mp4
