@@ -11,9 +11,14 @@ simulate_v6.py — forced–dissipative barotropic vorticity on a rotating spher
     F              stochastic forcing in a narrow high-l band
 
 This is the SAME equation and the SAME (verified-correct) numerics as v5 — RK2
-(Heun) for advection+forcing, an exact integrating factor for the linear
-dissipation, and a metric-consistent spectral Jacobian via physical gradient
-components.  Two things differ from v5:
+(Heun) for advection + exact integrating factor for dissipation (Lie splitting,
+globally O(dt)), and a metric-consistent spectral Jacobian via physical gradient
+components.  The nonlinear substep is 2nd-order Heun and the linear factor is
+exact, but the Lie–Trotter split between them makes the GLOBAL scheme first-order
+(step-halving error ratio = 2.00; v6_critical_audit.md §2.1).  This is fine for
+strongly-dissipated steady-state statistics — and with white-in-time forcing the
+strong order is ≤ 1 regardless — but the scheme is NOT globally 2nd-order.  Two
+things differ from v5:
 
   1. The Coriolis coefficient is FIXED.  pyshtools with normalization='4pi'
      uses the real harmonic  Y₁⁰ = √3·cosθ = √3·sinφ  (∫Y²dΩ = 4π).  To get
@@ -131,7 +136,7 @@ class SpectralVorticity:
                 f_lm[1, l, 1:l + 1] = rng.standard_normal(l) * amp
         return f_lm
 
-    # ── time step (RK2 / Heun + exact linear factor) ────────────────────
+    # ── time step (Heun advection + exact linear factor, Lie split O(dt)) ─
 
     def _tendency(self, omega_lm):
         psi_lm = self._inv_ev * omega_lm
