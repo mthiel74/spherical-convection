@@ -99,6 +99,18 @@ SURFACE_DS = 1        # downsample stride for the coloured outer surface
 L_REF      = 10       # mixing-length reference degree for radial penetration
 CORE_LMAX  = 12       # radiative interior painted from only the largest scales
 
+# Differential-rotation shear.  The Sun rotates faster at the equator/surface
+# than deeper down; a pattern continued inward is therefore twisted in longitude
+# with depth.  We rotate the reconstructed field by a longitude offset that grows
+# linearly from 0 at the surface (r=R_OUTER, so the cut faces still join the
+# coloured surface seamlessly) to SHEAR_DEG at the base (r=R_INNER).  This bends
+# the radial cross-section structures into concentric arcs along the shell.
+# v5 used an arbitrary 55°; we use a MODERATE, physically-motivated 25° — enough
+# to curve the structures, small enough not to over-wind them.  A longitude shift
+# is a pure rotation about the polar axis, applied in spectral space (each order-m
+# coefficient rotates by m·α), so it costs almost nothing.
+SHEAR_DEG  = 25.0     # peak longitude twist (deg) across the shell, base vs surface
+
 # Camera
 VIEW_ELEV = 24.0
 VIEW_AZIM = 40.0

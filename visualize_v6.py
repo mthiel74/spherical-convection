@@ -28,11 +28,13 @@ Consequences, all physical in character rather than cosmetic:
     (high-l) stay surface-confined — the depth ordering follows from the
     eigenfunction, not from an ad-hoc decay law;
   • at r = R_outer the factor is 1, so the cut faces join the coloured surface
-    seamlessly (no shear needed);
+    seamlessly; a MODERATE, physically-motivated differential-rotation shear then
+    twists the field in longitude with depth (0 at the surface → SHEAR_DEG at the
+    base), bending the radial cross-section structures into concentric arcs;
   • the region below R_inner = 0.71 R_☉ is the STABLE radiative interior (no
     convection).  We paint the inner core with only the large-scale (l ≤ CORE_LMAX)
-    part of the same field, continued to r = R_inner — a calm, honest tint, not
-    fabricated convection.
+    part of the same field, continued to r = R_inner and coloured against its own
+    (weaker) amplitude scale — a calm, honest tint, not fabricated convection.
 
 Everything that must occlude everything else (outer surface, inner core, the
 three cut faces) is emitted into a single Poly3DCollection so matplotlib
@@ -52,7 +54,7 @@ import pyshtools as pysh
 from config_v6 import (IMG_SIZE, LMAX, R_INNER, R_OUTER, R_MID,
                        CUTAWAY_LON_START, CUTAWAY_LON_END,
                        N_RADIAL, N_ANG, SURFACE_DS, CORE_LMAX, L_REF,
-                       VIEW_ELEV, VIEW_AZIM)
+                       SHEAR_DEG, VIEW_ELEV, VIEW_AZIM)
 
 # ── colormap ────────────────────────────────────────────────────────────────
 CMAP = plt.cm.RdBu_r                     # red = +ω_z, blue = −ω_z
@@ -76,6 +78,19 @@ _R_FACE = np.linspace(R_INNER, R_OUTER, N_RADIAL + 1)      # shared radial nodes
 # mixing-length-scaled radial eigenfunction factor  (r/R)^(l/L_REF)   (Nr,L+1)
 _RADFAC = (_R_FACE[:, None] / R_OUTER) ** (np.arange(LMAX + 1)[None, :] / L_REF)
 
+# Differential-rotation longitude shear.  α(r) grows linearly from 0 at the
+# surface to SHEAR_DEG at the base, so deeper structures are twisted in longitude.
+# A longitude shift is a rotation about the polar axis; in real spherical
+# harmonics it rotates the (cos, sin) pair of each order m by phase m·α:
+#     C'_lm =  C_lm cos(mα) − S_lm sin(mα)
+#     S'_lm =  C_lm sin(mα) + S_lm cos(mα).
+# Applying it in spectral space keeps the cached angular design matrix (_ymat) intact.
+_MORDER = np.arange(LMAX + 1)                               # order m, (L+1,)
+_ALPHA  = np.radians(SHEAR_DEG) * (R_OUTER - _R_FACE) / (R_OUTER - R_INNER)  # (Nr,)
+_PHASE  = _ALPHA[:, None] * _MORDER[None, :]               # m·α(r)   (Nr, L+1)
+_COSP   = np.cos(_PHASE)                                   # (Nr, L+1) over m
+_SINP   = np.sin(_PHASE)
+
 _YCACHE = {}     # geometry-only design matrices, built lazily
 
 
@@ -96,16 +111,22 @@ def _ymat(theta_deg, phi_deg):
 
 def _face_field(coeffs, ymat):
     """
-    Reconstruct ω on a (radius × angle) face by the radial eigenfunction:
+    Reconstruct ω on a (radius × angle) face by the radial eigenfunction, with a
+    depth-dependent longitude twist from differential rotation:
 
-        field[p, i] = Σ_lm coeffs_lm · (r_i/R)^(l/L_REF) · Y_lm(angle_p).
+        field[p, i] = Σ_lm [R_α(r_i)·coeffs]_lm · (r_i/R)^(l/L_REF) · Y_lm(angle_p),
 
-    Returns an (P, Nr) array aligned with a meshgrid(r, angle) of shape
-    (P=len(angle), Nr=len(r)).
+    where R_α(r) rotates the field by longitude offset α(r) (0 at the surface,
+    SHEAR_DEG at the base).  Returns an (P, Nr) array aligned with a
+    meshgrid(r, angle) of shape (P=len(angle), Nr=len(r)).
     """
-    L = LMAX
-    # scaled coefficients per radius: (Nr, 2, L+1, L+1)
-    scaled = coeffs[None] * _RADFAC[:, None, :, None]     # broadcast (r/R)^l over m
+    C, S = coeffs[0], coeffs[1]                           # (L+1, L+1) [l, m]
+    # per-radius longitude rotation (differential-rotation shear), broadcast over m
+    Crot = C[None] * _COSP[:, None, :] - S[None] * _SINP[:, None, :]   # (Nr,L+1,L+1)
+    Srot = C[None] * _SINP[:, None, :] + S[None] * _COSP[:, None, :]
+    rot = np.stack([Crot, Srot], axis=1)                 # (Nr, 2, L+1, L+1)
+    # scaled coefficients per radius: multiply by (r/R)^(l/L_REF) over degree l
+    scaled = rot * _RADFAC[:, None, :, None]
     scaled = scaled.reshape(_RADFAC.shape[0], -1)         # (Nr, ncoef)
     field = ymat @ scaled.T                               # (P, Nr)
     return field
@@ -215,18 +236,31 @@ def _inner_core(coeffs, cam, vmax):
     """
     Inner-core sphere (radius R_INNER) = the STABLE radiative interior.  Painted
     with only the large-scale (l ≤ CORE_LMAX) part of the SAME field, continued
-    to r = R_INNER by the eigenfunction factor (R_INNER/R_OUTER)^(l/L_REF).  This
-    is the large-scale flow that penetrates to the base — a calm tint, honestly
-    the only thing a 2-D surface field can say about the deep interior.  Lambert
-    shading is kept for 3-D form.
+    to r = R_INNER by the eigenfunction factor (R_INNER/R_OUTER)^(l/L_REF), and
+    twisted by the full differential-rotation offset α(R_INNER)=SHEAR_DEG so it
+    joins the inner edge of the cross-section faces.  This is the large-scale flow
+    that penetrates to the base — a calm, smoothly coloured tint, honestly the
+    only thing a 2-D surface field can say about the deep interior.
+
+    The l ≤ CORE_LMAX content of this field is ~20× weaker than the (filament-
+    dominated) surface field, so it is coloured against its OWN amplitude scale
+    rather than the surface vmax — otherwise every value collapses to mid-white
+    and the core reads as a bare wireframe.  Lambert shading is kept for 3-D form.
     """
     Lc = CORE_LMAX
-    core = np.zeros_like(coeffs)
-    fac = (R_INNER / R_OUTER) ** (np.arange(Lc + 1) / L_REF)
-    core[:, :Lc + 1, :Lc + 1] = coeffs[:, :Lc + 1, :Lc + 1] * fac[None, :, None]
-    cc = pysh.SHCoeffs.from_array(core[:, :Lc + 1, :Lc + 1],
-                                  normalization='4pi', csphase=1)
+    core = np.zeros((2, Lc + 1, Lc + 1))
+    fac = (R_INNER / R_OUTER) ** (np.arange(Lc + 1) / L_REF)          # radial, over l
+    core[:] = coeffs[:, :Lc + 1, :Lc + 1] * fac[None, :, None]
+    # full base longitude twist α(R_INNER)=SHEAR_DEG, rotating each order m by m·α
+    m = np.arange(Lc + 1)
+    cph = np.cos(np.radians(SHEAR_DEG) * m)
+    sph = np.sin(np.radians(SHEAR_DEG) * m)
+    C0, S0 = core[0].copy(), core[1].copy()
+    core[0] = C0 * cph[None, :] - S0 * sph[None, :]
+    core[1] = C0 * sph[None, :] + S0 * cph[None, :]
+    cc = pysh.SHCoeffs.from_array(core, normalization='4pi', csphase=1)
     g = cc.expand(grid='DH2')
+    vmax = np.percentile(np.abs(g.data), 97) + 1e-12     # core's own colour scale
     csample = make_sampler(g.data, g.lats(), g.lons())
 
     u = np.linspace(0, 2 * np.pi, 97)
