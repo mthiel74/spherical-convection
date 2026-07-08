@@ -7,9 +7,10 @@
 #
 # Changes vs v5, motivated by physics_audit.md:
 #   • Coriolis coefficient fixed (was √(4π)≈3.545× too large — see simulate_v6).
-#   • Forcing moved WELL ABOVE the Rhines scale (l≈60–80) so an inverse cascade
-#     can run below it (→ jets) and a forward enstrophy cascade above it
-#     (→ filaments).
+#   • Forcing moved above the Rhines scale (l≈60–80) so SOME inverse transfer can
+#     run below it and a forward enstrophy cascade above it (→ filaments).  The
+#     separation is only marginal (l_R≈23 vs forcing 60–80, ratio 2.6), so the
+#     spectrum broadens but jets are NOT achieved (see FORCE_* below).
 #   • Linear drag cut ~8× (0.25 → 0.03) so the inverse cascade is not killed.
 #   • Higher resolution (T85 → T127) to resolve the filament range.
 #   • Honest interior: the cross-sections are built by the correct radial
@@ -37,15 +38,17 @@ LMAX = 127            # T127 — resolves the forward enstrophy (filament) casca
 # forcing band (l≈60–80) is essentially untouched (τ ≳ 10) — a clean,
 # scale-selective small-scale sink that sets the filament cutoff.
 NU_HYPER = 6.0e-17
-# Uniform linear (Rayleigh) drag μ.  Deliberately WEAK: it arrests the inverse
-# cascade at the Rhines scale (→ jets) instead of killing it (v5 used μ=0.25,
-# which suppressed the cascade entirely).  τ_drag = 1/μ ≈ 33 time units.
+# Uniform linear (Rayleigh) drag μ.  Deliberately WEAK: it lets SOME inverse
+# transfer run instead of killing it (v5 used μ=0.25, which suppressed the
+# cascade entirely).  It does NOT, at these parameters, arrest the cascade into
+# jets — zonal energy stays ~3.7% (v6_critical_audit §4.2).  τ_drag = 1/μ ≈ 33 tu.
 LINEAR_DRAG = 0.03
 
 # ── Stochastic forcing ──────────────────────────────────────────────────────
-# Force at SMALL scales, well above the Rhines degree (l_R≈8–20 here), leaving a
-# wide inertial range below (inverse cascade → jets/large vortices) and above
-# (forward enstrophy cascade → filaments).
+# Force at SMALL scales, above the Rhines degree (measured l_R≈23 here, ratio
+# only 2.6 — a MARGINAL separation, not "well above"), leaving a short inverse
+# range below (some upscale transfer, but no jets at these parameters) and a
+# forward enstrophy cascade above (→ filaments).
 FORCE_LMIN = 60       # inject energy at l >= FORCE_LMIN
 FORCE_LMAX = 80       # inject energy at l <= FORCE_LMAX
 FORCE_AMP  = 2.2      # forcing amplitude (tuned for effective Re ≈ 50–100)

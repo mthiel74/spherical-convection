@@ -43,8 +43,8 @@ singularity of a naive ∂λ,∂φ Jacobian).
 | | v5 | v6 | why |
 |---|---|---|---|
 | **Coriolis coefficient** | `2Ω·√(4π/3)` | `2Ω/√3` | v5 used the *orthonormal* value with the *4π* harmonics — too large by exactly √(4π) ≈ 3.545, so the effective rotation was ≈142, not 40. |
-| **Forcing band** | l = 24–52 (on the Rhines scale) | l = 60–80 (well above it) | leaves room for an inverse cascade *below* (→ jets/large vortices) and a forward enstrophy cascade *above* (→ filaments). |
-| **Linear drag μ** | 0.25 | 0.03 | v5's drag killed the inverse cascade (effective Re ≈ 8, no jets). Weak drag lets it run and arrest at the Rhines scale. |
+| **Forcing band** | l = 24–52 (on the Rhines scale) | l = 60–80 (above the Rhines scale) | leaves room for *some* inverse transfer *below* and a forward enstrophy cascade *above* (→ filaments). Note the separation is only marginal (see below). |
+| **Linear drag μ** | 0.25 | 0.03 | v5's strong drag suppressed the inverse cascade entirely. Weak drag lets *some* upscale transfer run; it does not, at these parameters, produce jets (see below). |
 | **Resolution** | T85 | T127 | resolves the filament (forward enstrophy) range. |
 | **Spinup** | 8 000 steps | 22 000 steps | the cascade needs ~1 drag time to develop. |
 | **Interior** | ξ⁴-decayed, longitude-sheared copy of the surface + sinusoidal "bands" (cosmetic) | **radial eigenfunction** `(r/R)^l` (physics, see below) | v5's interior was painted on. |
@@ -88,13 +88,21 @@ labelled as a reconstruction, not a simulation.
   ∇⁸ hyperviscosity, exact integrating-factor dissipation, RK2, and a
   metric-consistent spherical Jacobian.
 - **The Coriolis coefficient is now correct** (Ω = 40 means Ω = 40).
-- **The turbulence is actually developed** — with forcing above the Rhines
-  scale and weak drag, the run produces a *broad* enstrophy spectrum (filaments
-  via the forward enstrophy cascade) and builds large-scale / zonal structure
-  via the inverse cascade, instead of v5's narrow-band blob field. The printed
-  diagnostics (enstrophy fractions below/in/above the forcing band, zonal-energy
-  fraction, ω_rms, and the drag ratio ω_rms/μ — a nondimensional inverse-drag
-  parameter, *not* a Reynolds number) quantify this at run time.
+- **The spectrum genuinely broadened** — with forcing above the Rhines scale and
+  weak drag, the run produces a *broad* enstrophy spectrum (53 % below / 31 %
+  in-band / 16 % above the forcing band, vs v5's 97 % trapped in-band), so a
+  forward enstrophy cascade (filaments) and *some* inverse transfer both exist.
+  This is a real, measurable improvement over v5's narrow-band blob field.
+  **Jets are NOT achieved, however:** zonal (m=0) energy is only ~3.7 % and
+  *falling* over the recorded window — essentially isotropic turbulence with a
+  whisper of anisotropy, not the 50–90 % zonal fraction of a jet regime. The
+  scale separation that would drive jets is marginal: the Rhines degree
+  l_R ≈ 23 sits only a factor ~2.6 below the forcing band (60–80), and ~42 % of
+  injected energy leaks to hyperviscosity at small scales instead of cascading
+  upscale (v6_critical_audit §4.2–4.3). The printed diagnostics (enstrophy
+  fractions below/in/above the forcing band, zonal-energy fraction, ω_rms, and
+  the drag ratio ω_rms/μ — a nondimensional inverse-drag parameter, *not* a
+  Reynolds number) quantify this at run time.
 - **The interior is honest** — the exact radial eigenfunction, labelled as a
   reconstruction; a calm radiative core tied to the real large-scale field.
 
@@ -116,9 +124,12 @@ A 2-D barotropic model omits, *by construction*:
   components a single scalar ω cannot carry).
 - **No magnetism** ⇒ no dynamo, no cycle, no sunspots.
 
-The legitimate physical niche of this model is **Jupiter-like 2-D geostrophic
-turbulence** (zonal jets from an arrested inverse cascade), *not* solar
-convection.
+The legitimate physical niche of this *class* of model is **Jupiter-like 2-D
+geostrophic turbulence** (zonal jets from an arrested inverse cascade), *not*
+solar convection. Note the present run does **not** reach that jet regime — at
+l_R ≈ 23 vs forcing 60–80 (ratio 2.6) the scale separation is too marginal and
+zonal energy stays ~3.7 %; realising jets would require pushing the forcing
+lower / widening the inverse range (v6_critical_audit §4.2).
 
 ## To actually model solar convection
 

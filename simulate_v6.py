@@ -25,11 +25,13 @@ things differ from v5:
      f = 2Ω sinφ the coefficient must be  2Ω/√3, NOT the v5 value
      2Ω·√(4π/3), which was too large by exactly √(4π) ≈ 3.545 (physics_audit.md).
 
-  2. The parameters (config_v6.py) are chosen so the flow actually develops the
-     turbulence it claims: forcing at l≈60–80 (well above the Rhines scale),
-     weak drag μ=0.03, and enough resolution/spinup for both an inverse cascade
-     (→ zonal jets, large vortices) and a forward enstrophy cascade
-     (→ filaments) to run.  Diagnostics below verify this.
+  2. The parameters (config_v6.py) broaden the spectrum: forcing at l≈60–80
+     (above, but only marginally above, the Rhines scale l_R≈23), weak drag
+     μ=0.03, and T127 resolution let a forward enstrophy cascade (→ filaments)
+     and SOME inverse transfer run.  This does NOT produce zonal jets — zonal
+     energy stays ~3.7% and falling; the scale separation (ratio 2.6) is too
+     marginal (v6_critical_audit.md §4.2).  Diagnostics below quantify the
+     spectrum breadth and the (small) zonal fraction.
 
 It is NOT a convection model — there is no buoyancy, stratification, energy
 equation or vertical velocity.  See README_v6.md.
