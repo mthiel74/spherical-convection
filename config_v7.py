@@ -269,6 +269,29 @@ DIFF_ROT_ENABLED     = False   # relax the m=0 mean flow toward the DR profile
 DIFF_ROT_DELTA_OMEGA = 0.3     # ΔΩ — equator-to-pole angular-velocity contrast
 DIFF_ROT_TAU         = 10.0    # τ_relax — Newtonian relaxation time (time units)
 
+# ── 10.  Topographic β / bottom relief ───────────────────────────────────────
+# scientific_improvements.md §10.  Add a FIXED topography h(θ,φ) to the potential
+# vorticity, so the quantity ADVECTED by the flow becomes
+#           q = ω + f + f₀ h / H         (h = relief, H = layer depth, f₀ = 2Ω₀),
+# i.e. q = ω + f + η with the stationary topographic vorticity η(θ,φ) ≡ f₀ h/H.
+# The tendency N = −J(ψ, q) then splits as
+#           N = −J(ψ, ω+f) − J(ψ, η),
+# so the ONLY change is the extra advection term −J(ψ, η) of a FIXED field η by
+# the flow ψ = ∇⁻²ω.  η is not part of the streamfunction inversion (it is an
+# external PV source, not flow vorticity), so ψ is unchanged.  Physically the
+# stationary PV-gradient ∇η radiates topographic Rossby waves, exerts form drag,
+# and can anchor standing eddies / lock jets, breaking the artificial zonal
+# symmetry (Vallis & Maltrud 1993; Vallis 2017 §14).
+#
+#   REPRESENTATION.  η is a few low-order spherical harmonics (continental-scale
+#   ridges).  TOPO_MODES maps (l,m) → amplitude of the REAL cosine coefficient
+#   η_lm (4π-normalised c[0,l,m] slot).  f₀ h/H is folded into the amplitude, so
+#   TOPO_MODES values are already in vorticity units.  Only m≤l, l≥1 are legal
+#   (an l=0 topography is a constant PV offset with zero gradient — no dynamics).
+TOPO_ENABLED = False
+# Default relief: an l=2,m=0 axisymmetric belt + an l=3,m=2 zonally-varying ridge.
+TOPO_MODES   = {(2, 0): 0.5, (3, 2): 0.3}
+
 # ── Time stepping ───────────────────────────────────────────────────────────
 # The linear (dissipation+drag) part is integrated EXACTLY by the integrating
 # factor, so dt is limited only by the advective CFL of the Heun (RK2) nonlinear

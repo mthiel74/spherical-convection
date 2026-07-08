@@ -42,7 +42,8 @@ from config_v7 import (OMEGA, LMAX, NU_HYPER, LINEAR_DRAG, FORCE_LMIN,
                        FORCE_BAND_SUM, EPSILON_TARGET, FORCE_FROM_EPSILON,
                        FORCE_TYPE, FORCE_CORR_TIME,
                        SVV_ENABLED, SVV_EPS0, SVV_LCUT,
-                       DIFF_ROT_ENABLED, DIFF_ROT_DELTA_OMEGA, DIFF_ROT_TAU)
+                       DIFF_ROT_ENABLED, DIFF_ROT_DELTA_OMEGA, DIFF_ROT_TAU,
+                       TOPO_ENABLED, TOPO_MODES)
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -207,6 +208,30 @@ def _diff_rot_target(lmax, delta_omega):
     return omega_target
 
 
+def _topography_lm(lmax, topo_modes):
+    """
+    Fixed topographic vorticity η_lm = f₀ h/H (improvement #10;
+    scientific_improvements.md §10) from a dict of (l,m) → amplitude.
+
+    η enters the potential vorticity q = ω + f + η and is advected by the flow;
+    the solver adds the extra term −J(ψ, η) (a FIXED field) to the tendency.  Each
+    entry sets the REAL cosine coefficient η[0,l,m] (4π-normalised).  l=0 entries
+    are rejected (a constant PV offset has zero gradient, hence no dynamics);
+    m>l is illegal.
+
+    Returns a (2,L+1,L+1) array (only the specified c[0,l,m] slots nonzero).
+    """
+    eta = np.zeros((2, lmax + 1, lmax + 1))
+    for (l, m), amp in topo_modes.items():
+        if l < 1:
+            raise ValueError(f"TOPO_MODES: l must be ≥ 1 (got l={l}); an l=0 "
+                             f"topography has no gradient and no dynamics.")
+        if not (0 <= m <= l) or l > lmax:
+            raise ValueError(f"TOPO_MODES: illegal (l,m)=({l},{m}) for LMAX={lmax}")
+        eta[0, l, m] = amp
+    return eta
+
+
 def check_dealiasing(lmax, verbose=True):
     """
     Verify the transform grid dealiases the quadratic Jacobian (improvement #6;
@@ -324,6 +349,13 @@ class SpectralVorticity:
         if self.diff_rot_enabled:
             self._omega_target = _diff_rot_target(self.lmax, DIFF_ROT_DELTA_OMEGA)
             self._diff_rot_inv_tau = 1.0 / DIFF_ROT_TAU
+
+        # ── Topographic β (improvement #10) ───────────────────────────────
+        # Fixed topographic vorticity η = f₀h/H added to the advected PV q=ω+f+η;
+        # unused unless TOPO_ENABLED.  Built once, added inside _tendency.
+        self.topo_enabled = TOPO_ENABLED
+        self._eta_lm = (_topography_lm(self.lmax, TOPO_MODES)
+                        if self.topo_enabled else None)
 
         # ── Forcing set-up (improvement #5) ───────────────────────────────
         # Effective amplitude (literal, or derived from ε if FORCE_FROM_EPSILON).
@@ -449,18 +481,22 @@ class SpectralVorticity:
 
     def _tendency(self, omega_lm):
         """
-        Nonlinear tendency N(ω) = −J(ψ, ω+f),  ψ = ∇⁻²ω, plus (if enabled) the
-        differential-rotation Newtonian relaxation of the m=0 mean flow
-        (improvement #9):
+        Nonlinear tendency N(ω) = −J(ψ, q),  ψ = ∇⁻²ω, with the advected potential
+        vorticity q = ω + f (+ η if TOPO_ENABLED), plus (if enabled) the
+        differential-rotation Newtonian relaxation of the m=0 mean flow:
 
-            N(ω) = −J(ψ, ω+f) − (1/τ_relax)·(ω̄ − ω̄_target)·[m=0 only].
+            N(ω) = −J(ψ, ω+f+η) − (1/τ_relax)·(ω̄ − ω̄_target)·[m=0 only].
 
-        The relaxation is part of the nonlinear tendency, so it is integrated by
-        whichever scheme (Strang / ETDRK4) evaluates N — the base case
-        (DIFF_ROT_ENABLED=False) is untouched.
+        η = f₀h/H is the FIXED topographic vorticity (improvement #10): adding it
+        to the advected field q contributes the extra term −J(ψ, η).  The
+        relaxation (improvement #9) is likewise part of N.  Both are integrated by
+        whichever scheme (Strang / ETDRK4) evaluates N; the base case (both flags
+        off) is untouched.
         """
         psi_lm = self._inv_ev * omega_lm
         abs_vor_lm = omega_lm + self._f_lm
+        if self.topo_enabled:
+            abs_vor_lm = abs_vor_lm + self._eta_lm      # q = ω + f + η
         tend = -self._jacobian_lm(psi_lm, abs_vor_lm)
         if self.diff_rot_enabled:
             # relax only the zonal-mean (m=0) vorticity toward ω̄_target
