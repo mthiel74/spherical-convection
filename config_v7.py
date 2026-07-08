@@ -229,6 +229,46 @@ SVV_ENABLED = False      # supplement the ∇⁸ sink with SVV (default off = v6
 SVV_LCUT    = 13         # l_cut ≈ √LMAX — SVV is exactly 0 for l ≤ l_cut
 SVV_EPS0    = 1.4e-4     # ε₀ — SVV strength at the truncation (τ≈0.25 tu at l=L)
 
+# ═════════════════════════════════════════════════════════════════════════════
+# Tier B — NEW PHYSICS (scientific_improvements.md §§9–11).  Each of the three
+# terms below is an OPTIONAL extra term in the SAME barotropic solver, DISABLED
+# by default so the base v7 run (§§1–8) is byte-for-byte unchanged.  Enable one
+# (or several) by flipping its flag.  Improvements §§12–14 (two-layer QG, shallow
+# water, MHD) are separate standalone modules, not flags here.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ── 9.  Differential-rotation mean flow (Newtonian relaxation) ────────────────
+# scientific_improvements.md §9.  Relax the ZONAL-MEAN (m=0) vorticity toward a
+# prescribed differential-rotation profile, à la the Held–Suarez (1994) core, so
+# the mean shear is a genuine term in the evolution rather than a cosmetic twist.
+# The relaxation seeds a barotropically-unstable mean flow that can shed eddies
+# and organise jets self-consistently.
+#
+#   THE PROFILE.  A solar-like angular velocity, fastest at the equator:
+#           Ω(φ) = Ω₀ − ΔΩ sin²φ ,     φ = LATITUDE  (φ=0 equator, ±90° poles).
+#   (θ in the task = latitude here; written φ to avoid clashing with colatitude.
+#   sin²φ = 0 at the equator ⇒ Ω = Ω₀ there — the fast-equator solar law.  Ω₀ is
+#   already carried by the Coriolis term f = 2Ω₀ sinφ, so only the DIFFERENTIAL
+#   part δΩ(φ) = Ω(φ) − Ω₀ = −ΔΩ sin²φ enters the relative flow.)
+#
+#   FROM Ω(φ) TO A TARGET VORTICITY.  The differential rotation is a zonal wind
+#   in the co-rotating frame,  ū(φ) = δΩ(φ)·R cosφ  (R cosφ = distance from the
+#   spin axis; R=1).  A zonal wind derives from a streamfunction by ū = −∂ψ̄/∂y =
+#   −(1/R)∂ψ̄/∂φ, so
+#           ∂ψ̄/∂φ = −R ū = R² ΔΩ sin²φ cosφ  ⇒  ψ̄_target(φ) = (R² ΔΩ/3) sin³φ,
+#   and the target zonal-mean vorticity is ω̄_target = ∇²ψ̄_target, i.e. in
+#   spectral space ω̄_target,l0 = −l(l+1)·ψ̄_target,l0 (a pure m=0 spectrum).  The
+#   solver builds ψ̄_target(φ) on the grid, expands it, keeps m=0, and applies
+#   ∇² spectrally — no hand-differentiation, so the construction is exact to
+#   truncation.
+#
+#   THE TERM.  Added to the tendency of the m=0 modes ONLY (Held–Suarez form):
+#           ∂ω̄/∂t |_relax = −(1/τ_relax)·(ω̄ − ω̄_target).
+#   τ_relax is the relaxation time (short ⇒ stiff mean forcing; long ⇒ gentle).
+DIFF_ROT_ENABLED     = False   # relax the m=0 mean flow toward the DR profile
+DIFF_ROT_DELTA_OMEGA = 0.3     # ΔΩ — equator-to-pole angular-velocity contrast
+DIFF_ROT_TAU         = 10.0    # τ_relax — Newtonian relaxation time (time units)
+
 # ── Time stepping ───────────────────────────────────────────────────────────
 # The linear (dissipation+drag) part is integrated EXACTLY by the integrating
 # factor, so dt is limited only by the advective CFL of the Heun (RK2) nonlinear

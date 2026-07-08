@@ -41,7 +41,8 @@ from config_v7 import (OMEGA, LMAX, NU_HYPER, LINEAR_DRAG, FORCE_LMIN,
                        TIME_SCHEME, ETDRK4_M,
                        FORCE_BAND_SUM, EPSILON_TARGET, FORCE_FROM_EPSILON,
                        FORCE_TYPE, FORCE_CORR_TIME,
-                       SVV_ENABLED, SVV_EPS0, SVV_LCUT)
+                       SVV_ENABLED, SVV_EPS0, SVV_LCUT,
+                       DIFF_ROT_ENABLED, DIFF_ROT_DELTA_OMEGA, DIFF_ROT_TAU)
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -172,6 +173,40 @@ def _etdrk4_coeffs(L, dt, M=32):
     return E, E2, Q, f1, f2, f3
 
 
+def _diff_rot_target(lmax, delta_omega):
+    """
+    Target zonal-mean vorticity ω̄_target,l0 for the differential-rotation
+    relaxation (improvement #9; scientific_improvements.md §9).
+
+    ── The profile.  A solar-like angular velocity, fastest at the equator,
+            Ω(φ) = Ω₀ − ΔΩ sin²φ ,   φ = LATITUDE (φ=0 equator, ±90° poles).
+    Ω₀ is already carried by the Coriolis term f = 2Ω₀ sinφ, so only the
+    DIFFERENTIAL part δΩ(φ) = Ω(φ) − Ω₀ = −ΔΩ sin²φ enters the relative flow.
+
+    ── From Ω(φ) to a target vorticity.  δΩ is a zonal wind in the co-rotating
+    frame, ū(φ) = δΩ(φ)·R cosφ (R cosφ = distance from the spin axis; R=1).  A
+    zonal wind derives from a streamfunction by ū = −∂ψ̄/∂y = −(1/R)∂ψ̄/∂φ, so
+            ∂ψ̄/∂φ = −R ū = R² ΔΩ sin²φ cosφ
+            ⇒ ψ̄_target(φ) = (R² ΔΩ / 3) sin³φ     (integration constant → 0),
+    and ω̄_target = ∇²ψ̄_target.  We build ψ̄_target(φ) on the DH2 grid (constant
+    in longitude ⇒ a pure m=0 field), expand it, keep the m=0 column, then apply
+    ∇² spectrally (eigenvalue −l(l+1)).  No hand-differentiation, so the target
+    is exact to the truncation.
+
+    Returns a (2,L+1,L+1) array that is zero except in the m=0 (c[0,l,0]) slots.
+    """
+    zero = pysh.SHCoeffs.from_zeros(lmax=lmax, normalization='4pi')
+    grid = zero.expand(grid='DH2')
+    lat = np.deg2rad(grid.lats())                       # latitude of each row
+    psi_lat = (delta_omega / 3.0) * np.sin(lat) ** 3    # ψ̄_target(φ), R=1
+    grid.data[:] = psi_lat[:, None]                     # constant in longitude
+    psi_lm = grid.expand(normalization='4pi', csphase=1, lmax_calc=lmax).coeffs
+    psi_target = np.zeros((2, lmax + 1, lmax + 1))
+    psi_target[0, :, 0] = psi_lm[0, :, 0]               # keep m=0 only
+    omega_target = _laplacian_eigenvalues(lmax) * psi_target   # ∇²ψ̄ = −l(l+1)ψ̄
+    return omega_target
+
+
 def check_dealiasing(lmax, verbose=True):
     """
     Verify the transform grid dealiases the quadratic Jacobian (improvement #6;
@@ -280,6 +315,15 @@ class SpectralVorticity:
         # (v5 used 2Ω·√(4π/3), the ORTHONORMAL value — a factor √(4π) too big.)
         self._f_lm = np.zeros((2, self.lmax + 1, self.lmax + 1))
         self._f_lm[0, 1, 0] = 2.0 * OMEGA / np.sqrt(3.0)
+
+        # ── Differential-rotation relaxation (improvement #9) ──────────────
+        # Precompute the target zonal-mean vorticity ω̄_target,l0 and the inverse
+        # relaxation time; both unused unless DIFF_ROT_ENABLED.  Applied to the
+        # m=0 modes only inside _tendency.
+        self.diff_rot_enabled = DIFF_ROT_ENABLED
+        if self.diff_rot_enabled:
+            self._omega_target = _diff_rot_target(self.lmax, DIFF_ROT_DELTA_OMEGA)
+            self._diff_rot_inv_tau = 1.0 / DIFF_ROT_TAU
 
         # ── Forcing set-up (improvement #5) ───────────────────────────────
         # Effective amplitude (literal, or derived from ε if FORCE_FROM_EPSILON).
@@ -404,10 +448,25 @@ class SpectralVorticity:
     # ── time step (Strang split: ½-diss · Heun advection · ½-diss + forcing) ─
 
     def _tendency(self, omega_lm):
-        """Nonlinear tendency N(ω) = −J(ψ, ω+f),  ψ = ∇⁻²ω."""
+        """
+        Nonlinear tendency N(ω) = −J(ψ, ω+f),  ψ = ∇⁻²ω, plus (if enabled) the
+        differential-rotation Newtonian relaxation of the m=0 mean flow
+        (improvement #9):
+
+            N(ω) = −J(ψ, ω+f) − (1/τ_relax)·(ω̄ − ω̄_target)·[m=0 only].
+
+        The relaxation is part of the nonlinear tendency, so it is integrated by
+        whichever scheme (Strang / ETDRK4) evaluates N — the base case
+        (DIFF_ROT_ENABLED=False) is untouched.
+        """
         psi_lm = self._inv_ev * omega_lm
         abs_vor_lm = omega_lm + self._f_lm
-        return -self._jacobian_lm(psi_lm, abs_vor_lm)
+        tend = -self._jacobian_lm(psi_lm, abs_vor_lm)
+        if self.diff_rot_enabled:
+            # relax only the zonal-mean (m=0) vorticity toward ω̄_target
+            tend[0, :, 0] += -self._diff_rot_inv_tau * (
+                omega_lm[0, :, 0] - self._omega_target[0, :, 0])
+        return tend
 
     def step(self, rng):
         """Advance one step with the configured scheme (config.TIME_SCHEME)."""
