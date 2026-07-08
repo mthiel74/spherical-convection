@@ -53,7 +53,9 @@ def main():
     l_R = np.sqrt(beta / (2 * U)) if U > 0 else np.nan
 
     print(f"frames={N}  T{L}")
-    print(f"ω_rms = {omega_rms:.3f}   effective Re ≈ ω_rms/μ = {omega_rms/LINEAR_DRAG:.1f}")
+    print(f"ω_rms = {omega_rms:.3f}   drag ratio ω_rms/μ = {omega_rms/LINEAR_DRAG:.1f} "
+          f"(NOT a Reynolds number — a nondim inverse-drag parameter; "
+          f"velocity-based Re at the forcing scale is ~140)")
     print(f"enstrophy fractions  below/in/above forcing band "
           f"(l={FORCE_LMIN}-{FORCE_LMAX}): "
           f"{below*100:.1f}% / {inband*100:.1f}% / {above*100:.1f}%")
@@ -90,7 +92,7 @@ def main():
 
     fig.suptitle(f"v6 saturated spectra (T{L}, μ={LINEAR_DRAG}, forcing l="
                  f"{FORCE_LMIN}–{FORCE_LMAX})   ω_rms={omega_rms:.2f}, "
-                 f"Re≈{omega_rms/LINEAR_DRAG:.0f}, zonalE={zonal*100:.1f}%",
+                 f"ω_rms/μ≈{omega_rms/LINEAR_DRAG:.0f}, zonalE={zonal*100:.1f}%",
                  fontsize=10)
     fig.tight_layout()
     fig.savefig("spectrum_v6.png", dpi=120)

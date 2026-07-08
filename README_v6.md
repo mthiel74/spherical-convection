@@ -93,7 +93,8 @@ labelled as a reconstruction, not a simulation.
   via the forward enstrophy cascade) and builds large-scale / zonal structure
   via the inverse cascade, instead of v5's narrow-band blob field. The printed
   diagnostics (enstrophy fractions below/in/above the forcing band, zonal-energy
-  fraction, ω_rms, effective Re) quantify this at run time.
+  fraction, ω_rms, and the drag ratio ω_rms/μ — a nondimensional inverse-drag
+  parameter, *not* a Reynolds number) quantify this at run time.
 - **The interior is honest** — the exact radial eigenfunction, labelled as a
   reconstruction; a calm radiative core tied to the real large-scale field.
 

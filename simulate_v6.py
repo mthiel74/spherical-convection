@@ -172,7 +172,10 @@ def diagnostics(omega_lm):
         signature of a developed cascade).
       • kinetic energy E_lm = c_lm² / [l(l+1)]  → zonal (m=0) energy fraction
         (large ⇒ jets).
-      • ω_rms = √(Σ c_lm²)  and effective Reynolds number Re ≈ ω_rms/μ.
+      • ω_rms = √(Σ c_lm²)  and the inverse-drag ratio ω_rms/μ.  NOTE: this is
+        NOT a Reynolds number — it is a nondimensional drag parameter (=100).
+        The velocity-based Re at the forcing scale is ~140 (v6_critical_audit
+        §18); do not read ω_rms/μ as Re.
     """
     c2 = omega_lm[0] ** 2 + omega_lm[1] ** 2          # (L+1, L+1) over (l,m)
     ens_l = c2.sum(axis=1)                            # per-degree enstrophy
@@ -191,14 +194,14 @@ def diagnostics(omega_lm):
 
     omega_rms = np.sqrt(c2.sum())
     return dict(below=below, inband=inband, above=above, zonal=zonal,
-                rms=omega_rms, Re=omega_rms / LINEAR_DRAG)
+                rms=omega_rms, drag_ratio=omega_rms / LINEAR_DRAG)
 
 
 def _fmt(d):
     return (f"ens[below/in/above band]={d['below']*100:4.1f}/"
             f"{d['inband']*100:4.1f}/{d['above']*100:4.1f}%  "
             f"zonalE={d['zonal']*100:4.1f}%  "
-            f"ω_rms={d['rms']:5.2f}  Re≈{d['Re']:5.1f}")
+            f"ω_rms={d['rms']:5.2f}  ω_rms/μ={d['drag_ratio']:5.1f}")
 
 
 # ── run simulation ───────────────────────────────────────────────────────────
