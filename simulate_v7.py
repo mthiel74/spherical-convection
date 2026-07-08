@@ -141,6 +141,52 @@ def _etdrk4_coeffs(L, dt, M=32):
     return E, E2, Q, f1, f2, f3
 
 
+def check_dealiasing(lmax, verbose=True):
+    """
+    Verify the transform grid dealiases the quadratic Jacobian (improvement #6;
+    scientific_improvements.md §6).
+
+    ── The Orszag 2/3 (dealiasing) rule.  The only nonlinearity here is the
+    QUADRATIC Jacobian J(ψ, ω+f): a product of two fields each band-limited to
+    degree L.  A product of two degree-≤L fields contains content up to degree
+    2L.  On a physical grid that resolves only up to some maximum degree, any
+    content above that maximum is ALIASED — folded back onto the retained
+    degrees, contaminating them.  To keep degrees 0…L alias-free after a
+    quadratic product, the grid must faithfully represent degrees up to 3L/2:
+    then the aliased content (from degrees 3L/2 … 2L) folds only onto degrees
+    ≥ L/2 … but is discarded because the result is re-truncated at L before it
+    can corrupt the resolved band.  Equivalently one keeps only the lowest 2/3 of
+    the grid's resolvable wavenumbers — Orszag's "2/3 rule" (Orszag 1971, JAS 28,
+    1074; Boyd, Chebyshev & Fourier Spectral Methods, 2001).
+
+    ── Concretely.  Require the grid to have at least
+
+            N ≥ ⌈ 3(L+1)/2 ⌉   points in BOTH latitude and longitude.
+
+    pyshtools' DH2 (Driscoll–Healy, sampling=2) grid has ≈ 2(L+1) latitudes and
+    ≈ 4(L+1) longitudes, both comfortably above 3(L+1)/2 — so quadratic products
+    are dealiased at this truncation.  This routine confirms it and warns loudly
+    if a future resolution/grid change ever violates the rule.
+
+    Returns dict(nlat, nlon, required, ok).
+    """
+    required = int(np.ceil(1.5 * (lmax + 1)))       # ⌈ 3(L+1)/2 ⌉
+    # Actual grid the solver uses: expand a zero field to read the DH2 dims.
+    g = pysh.SHCoeffs.from_zeros(lmax=lmax, normalization='4pi').expand(grid='DH2')
+    nlat, nlon = g.data.shape
+    ok = (nlat >= required) and (nlon >= required)
+    if verbose:
+        status = "✓" if ok else "⚠️  VIOLATED"
+        print(f"Dealiasing (Orszag 2/3) check: T{lmax}  DH2 grid {nlat}×{nlon} "
+              f"(lat×lon), need ≥ {required} each  →  {status}", flush=True)
+        if not ok:
+            print("  ⚠️  the transform grid is too coarse to dealias the "
+                  "quadratic Jacobian at this truncation — the resolved band "
+                  "will be aliased. Increase the grid density or lower LMAX.",
+                  flush=True)
+    return dict(nlat=nlat, nlon=nlon, required=required, ok=ok)
+
+
 def effective_force_amp():
     """
     The forcing amplitude actually used (improvement #5a).
@@ -163,6 +209,8 @@ class SpectralVorticity:
 
     def __init__(self):
         self.lmax = LMAX
+        # Confirm the DH2 grid dealiases the quadratic Jacobian (improvement #6).
+        self.dealiasing = check_dealiasing(self.lmax, verbose=True)
         self._ev = _laplacian_eigenvalues(self.lmax)          # (2,L+1,L+1)
         # Full-step linear integrating factor exp(−(μ+νλ⁴)·dt) …
         self._visc = _dissipation_filter(self.lmax, NU_HYPER, LINEAR_DRAG, DT)
