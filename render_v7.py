@@ -16,14 +16,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from config_v6 import FPS, FRAME_SKIP, DT, N_SPINUP
-from visualize_v6 import render_frame, fig_to_rgb
+from visualize_v6 import render_frame, fig_to_rgb, frame_scales
 from render_movie_v6 import write_mp4
 
 SRC_NPZ = "frames_v6_long.npz"
 OUT_MP4 = "output_v7.mp4"
 ICLOUD_MP4 = os.path.expanduser(
     "~/Library/Mobile Documents/com~apple~CloudDocs/Documents/Claude/"
-    "2026-07-08_spherical-convection_v7.mp4"
+    "2026-07-09_spherical-convection_v7.mp4"
 )
 
 def main():
@@ -33,6 +33,21 @@ def main():
     print(f"Loaded {total} frames (T{int(data['lmax'])}) "
           f"-> {total / FPS:.1f} s @ {FPS} fps")
 
+    # ── First pass: one FIXED global colour scale for the whole run.  The v6
+    # renderer recomputed vmax (97th percentile) every frame, which made the
+    # brightness "breathe" and the core-amplification label flicker (×23…×38).
+    # Take the median of the per-frame 97th percentiles as the single vmax.
+    print("Scanning frames for a global fixed colour scale …", flush=True)
+    surf_vs, core_vs = [], []
+    for coeffs in frames:
+        s, c = frame_scales(coeffs)
+        surf_vs.append(s); core_vs.append(c)
+    vmax = float(np.median(surf_vs))
+    core_vmax = float(np.median(core_vs))
+    print(f"  fixed surface vmax = {vmax:.4g}   core vmax = {core_vmax:.4g}   "
+          f"(core ×{vmax / core_vmax:.0f}); per-frame breathing removed",
+          flush=True)
+
     t0 = N_SPINUP * DT
     dt_f = FRAME_SKIP * DT
     imgs = []
@@ -40,7 +55,7 @@ def main():
         t_val = t0 + i * dt_f
         if (i + 1) % 50 == 0 or i == 0:
             print(f"  rendering frame {i+1}/{total}  t={t_val:.1f}", flush=True)
-        fig = render_frame(coeffs, i, total, t_val)
+        fig = render_frame(coeffs, i, total, t_val, vmax=vmax, core_vmax=core_vmax)
         imgs.append(fig_to_rgb(fig))
         plt.close(fig)
 

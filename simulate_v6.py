@@ -143,7 +143,12 @@ class SpectralVorticity:
     def _tendency(self, omega_lm):
         psi_lm = self._inv_ev * omega_lm
         abs_vor_lm = omega_lm + self._f_lm
-        return -self._jacobian_lm(psi_lm, abs_vor_lm)
+        # ∂ω/∂t = −J_cart(ψ, ω+f).  The cached _jacobian_lm uses physical
+        # (θ̂ south, φ̂ east) gradient components, giving Jc = −J_cart, so the
+        # correct tendency is +Jc (NOT −Jc).  The earlier −Jc mirrored Ω→−Ω and
+        # sent Rossby waves eastward; +Jc reproduces the Rossby-Haurwitz drift
+        # −2Ωm/[l(l+1)] (westward) to ratio 1.0000 (test_rossby, l=8 m=4).
+        return self._jacobian_lm(psi_lm, abs_vor_lm)
 
     def step(self, rng):
         k1 = self._tendency(self.omega_lm)

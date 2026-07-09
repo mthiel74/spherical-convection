@@ -241,7 +241,7 @@ def _meridional_face(coeffs, vmax, lon_deg):
     return verts, rgba
 
 
-def _inner_core(coeffs, cam, vmax):
+def _inner_core(coeffs, cam, vmax, core_vmax=None):
     """
     Inner-core sphere (radius R_INNER) = the STABLE radiative interior.  Painted
     with only the large-scale (l ≤ CORE_LMAX) part of the SAME field, continued
@@ -254,7 +254,11 @@ def _inner_core(coeffs, cam, vmax):
     The l ≤ CORE_LMAX content of this field is ~20× weaker than the (filament-
     dominated) surface field, so it is coloured against its OWN amplitude scale
     rather than the surface vmax — otherwise every value collapses to mid-white
-    and the core reads as a bare wireframe.  Lambert shading is kept for 3-D form.
+    and the core reads as a bare wireframe.  When core_vmax is supplied (the
+    global first-pass value) it is used verbatim so the colour scale — and hence
+    the "×N amplified" label — is FIXED across all frames (no flicker); otherwise
+    the per-frame 97th percentile is used.  Smooth (Gouraud-like) Lambert shading
+    on a fine 192×96 mesh gives 3-D form without blocky facets.
     """
     Lc = CORE_LMAX
     core = np.zeros((2, Lc + 1, Lc + 1))
@@ -269,11 +273,13 @@ def _inner_core(coeffs, cam, vmax):
     core[1] = C0 * sph[None, :] + S0 * cph[None, :]
     cc = pysh.SHCoeffs.from_array(core, normalization='4pi', csphase=1)
     g = cc.expand(grid='DH2')
-    vmax = np.percentile(np.abs(g.data), 97) + 1e-12     # core's own colour scale
+    if core_vmax is None:                                # core's own colour scale
+        core_vmax = np.percentile(np.abs(g.data), 97) + 1e-12
     csample = make_sampler(g.data, g.lats(), g.lons())
 
-    u = np.linspace(0, 2 * np.pi, 97)
-    v = np.linspace(0, np.pi, 49)
+    # Fine mesh (192×96 quads, was 96×48) → smooth curvature, no blocky tiles.
+    u = np.linspace(0, 2 * np.pi, 193)
+    v = np.linspace(0, np.pi, 97)
     U, V = np.meshgrid(u, v)
     nx = np.sin(V) * np.cos(U); ny = np.sin(V) * np.sin(U); nz = np.cos(V)
     X = R_INNER * nx; Y = R_INNER * ny; Z = R_INNER * nz
@@ -281,18 +287,22 @@ def _inner_core(coeffs, cam, vmax):
     lat = np.degrees(np.arcsin(np.clip(nz, -1.0, 1.0)))
     lon = np.degrees(np.arctan2(ny, nx))
     field = _node_to_face(csample(lat, lon))
-    rgb = _to_rgba(field, vmax)[:, :, :3]
+    rgb = _to_rgba(field, core_vmax)[:, :, :3]
 
-    ndot = _node_to_face(nx) * cam[0] + _node_to_face(ny) * cam[1] \
-        + _node_to_face(nz) * cam[2]
+    # Smooth/Gouraud-like Lambert term: interpolate the vertex normals to each
+    # face centre and RENORMALISE before the light dot-product, so the shading
+    # varies smoothly across the sphere instead of stepping per flat facet.
+    fnx = _node_to_face(nx); fny = _node_to_face(ny); fnz = _node_to_face(nz)
+    fnorm = np.sqrt(fnx ** 2 + fny ** 2 + fnz ** 2) + 1e-12
+    ndot = (fnx * cam[0] + fny * cam[1] + fnz * cam[2]) / fnorm
     shade = 0.55 + 0.45 * np.clip(ndot, 0.0, 1.0)
     rgb = rgb * shade[:, :, None]
     rgba = np.concatenate([rgb, np.ones((*shade.shape, 1))], axis=-1)
 
     verts = _mesh_quads(X, Y, Z)
-    # Return the core's own colour scale (vmax) so the caller can annotate how
-    # much it is amplified relative to the surface colorbar (see render_frame).
-    return verts, rgba.reshape(-1, 4), vmax
+    # Return the core's own colour scale so the caller can annotate how much it is
+    # amplified relative to the surface colorbar (see render_frame).
+    return verts, rgba.reshape(-1, 4), core_vmax
 
 
 # ── boundary curves on the three cut planes ───────────────────────────────
@@ -367,8 +377,31 @@ def _draw_graticule(ax, cam):
              R_OUTER * np.sin(phi))
 
 
+# ── per-frame colour scales for a global first pass ────────────────────────
+def frame_scales(coeffs):
+    """
+    Return (surface_vmax, core_vmax) for one frame, matching EXACTLY the
+    percentiles render_frame/_inner_core would compute, but without building any
+    3-D geometry.  Used by the renderer's first pass to derive a single global
+    vmax (median of these across all frames), eliminating per-frame brightness
+    "breathing" and the flickering core-amplification label.
+    """
+    surf = coeffs_to_surface(coeffs)
+    surf_vmax = np.percentile(np.abs(surf), 97) + 1e-12
+    Lc = CORE_LMAX
+    core = np.zeros((2, Lc + 1, Lc + 1))
+    fac = (R_INNER / R_OUTER) ** (np.arange(Lc + 1) / L_REF)
+    core[:] = coeffs[:, :Lc + 1, :Lc + 1] * fac[None, :, None]
+    # the SHEAR_DEG longitude twist is a pure rotation → does not change |field|,
+    # so the 97th-percentile core scale is identical with or without it here.
+    g = pysh.SHCoeffs.from_array(core, normalization='4pi', csphase=1).expand(grid='DH2')
+    core_vmax = np.percentile(np.abs(g.data), 97) + 1e-12
+    return surf_vmax, core_vmax
+
+
 # ── main render function ──────────────────────────────────────────────────
-def render_frame(coeffs, frame_idx, total_frames, t_val, figsize_px=None):
+def render_frame(coeffs, frame_idx, total_frames, t_val, figsize_px=None,
+                 vmax=None, core_vmax=None):
     if figsize_px is None:
         figsize_px = IMG_SIZE
     dpi = 100
@@ -378,7 +411,8 @@ def render_frame(coeffs, frame_idx, total_frames, t_val, figsize_px=None):
                          computed_zorder=False)
 
     surface_field = coeffs_to_surface(coeffs)
-    vmax = np.percentile(np.abs(surface_field), 97) + 1e-12
+    if vmax is None:                        # fall back to per-frame scale
+        vmax = np.percentile(np.abs(surface_field), 97) + 1e-12
     lat, lon = latlon_grid()
     sample = make_sampler(surface_field, lat, lon)
 
@@ -386,7 +420,7 @@ def render_frame(coeffs, frame_idx, total_frames, t_val, figsize_px=None):
     cam = np.array([np.cos(er) * np.cos(ar), np.cos(er) * np.sin(ar),
                     np.sin(er)])
 
-    core_verts, core_rgba, core_vmax = _inner_core(coeffs, cam, vmax)
+    core_verts, core_rgba, core_vmax = _inner_core(coeffs, cam, vmax, core_vmax)
     verts_all, rgba_all = [], []
     for v, c in (_outer_surface(sample, vmax),
                  _equatorial_face(coeffs, vmax),
@@ -423,6 +457,10 @@ def render_frame(coeffs, frame_idx, total_frames, t_val, figsize_px=None):
     fig.text(0.46, 0.905,
              rf"$\omega'_z$   (not convection — see README_v6)   t = {t_val:5.1f}",
              ha='center', fontsize=9, color='0.25')
+    # The simulation is integrated in the frame rotating with Ω, so nothing spins
+    # on screen — annotate this so the still camera is not read as "no rotation".
+    fig.text(0.46, 0.877, "viewed in the co-rotating frame",
+             ha='center', fontsize=8, style='italic', color='0.4')
     # Honesty note: the inner core is coloured on its OWN (weaker) amplitude
     # scale, not the surface colorbar; state the amplification so the viewer
     # knows a saturated-red core is ~core_vmax, not the colorbar's ±vmax.

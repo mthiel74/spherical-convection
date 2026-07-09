@@ -119,15 +119,22 @@ CORE_LMAX  = 12       # radiative interior painted from only the largest scales
 # A longitude shift is a pure rotation about the polar axis, applied in spectral
 # space (each order-m coefficient rotates by m·α), so it costs almost nothing.
 #
-# HONESTY: SHEAR_DEG=25° is a VISUALIZATION parameter that bends cross-section
+# HONESTY: SHEAR_DEG is a VISUALIZATION parameter that bends cross-section
 # structures into arcs; it is NOT derived from helioseismic differential rotation.
 # Solar differential rotation is a LATITUDINAL rate difference (ΔΩ/Ω ≈ 25–30%,
 # equator vs pole), NOT a radial longitude twist, and the strong radial shear is
 # confined to the tachocline (~0.7R) and near-surface layer, not a smooth 0→25°
 # ramp uniform in latitude.  The earlier "25% ≈ 25°" justification conflated a
-# fractional rate with a degree of arc; that reasoning was wrong.  25° is simply
-# a moderate, good-looking twist (v5 used an arbitrary 55°).
-SHEAR_DEG  = 25.0     # peak longitude twist (deg) across the shell — a viz choice
+# fractional rate with a degree of arc; that reasoning was wrong.  25° magnitude
+# is simply a moderate, good-looking twist (v5 used an arbitrary 55°).
+#
+# SIGN: in v6's convention a POSITIVE SHEAR_DEG twists deep features EAST of the
+# surface (deep leads).  The Sun rotates DIFFERENTIALLY with the surface leading
+# the interior, so we use a NEGATIVE value: the surface (r=R_OUTER, α=0) leads
+# and deeper layers trail westward, matching solar differential rotation.  (Note
+# the v5 conventions were opposite — v5's −55 does NOT translate to v6; here −25
+# is the same 25° magnitude with the physically-correct sign.)
+SHEAR_DEG  = -25.0    # peak longitude twist (deg) across the shell — a viz choice
 
 # Camera
 VIEW_ELEV = 24.0
