@@ -427,7 +427,9 @@ CORE_LMAX  = 12       # radiative interior painted from only the largest scales
 
 # Longitude twist for the cutaway faces (VISUALIZATION only, not dynamics —
 # improvement #9 would replace it with a real differential-rotation term).
-SHEAR_DEG  = 25.0     # peak longitude twist (deg) across the shell — a viz choice
+SHEAR_DEG  = -25.0    # peak longitude twist (deg) across the shell — a viz choice
+# SIGN: negative means surface leads interior (correct solar sense).
+# See config_v6.py for the full honesty caveat on this parameter.
 
 # Camera
 VIEW_ELEV = 24.0
